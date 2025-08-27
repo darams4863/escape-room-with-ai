@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: escape_room_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-escape_room_db}
+      POSTGRES_USER: ${POSTGRES_USER:-escape_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Seoul
+      PGTZ: Asia/Seoul
+    ports:
+      - "5433:5432"  # 호스트(로컬) 포트:컨테이너 내부 포트
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql  # 초기 스키마
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U escape_user -d escape_room_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: escape_room_redis
+    ports:
+      - "6379:6379"  # 로컬에서 직접 접근 가능
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build: .  # 로컬에서 빌드
+    container_name: escape_room_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - DEBUG=${DEBUG:-true}
+    volumes:
+      - ./:/workspace  # 전체 프로젝트 마운트
+    working_dir: /workspace  # 작업 디렉토리 설정
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload  # 올바른 경로
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local  # 로컬 개발용
+  redis_data:
+    driver: local
