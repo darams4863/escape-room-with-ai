@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from ..core.logger import logger, get_user_logger
 from ..core.exceptions import CustomError
 from ..models.user import User, UserCreate, UserLogin, Token
-from ..services.user_service import user_service
+from ..services.user_service import create_user, authenticate_user, verify_token_and_get_user
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer()
@@ -25,7 +25,10 @@ async def register(user_data: UserCreate):
             username=user_data.username
         )
         
-        user = await user_service.create_user(user_data)
+        user = await create_user(
+            user_data.username,
+            user_data.password
+        )
         
         # 사용자별 로거로 성공 로깅
         user_logger = get_user_logger(str(user.id))
@@ -37,15 +40,9 @@ async def register(user_data: UserCreate):
         
         return user
         
-    except CustomError as e:
-        logger.warning(f"Registration failed: {e.message}")
-        raise e.to_http_exception()
     except Exception as e:
         logger.error(f"Registration error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="회원가입 처리 중 오류가 발생했습니다."
-        )
+        raise e
 
 
 @router.post(
@@ -68,7 +65,11 @@ async def login(login_data: UserLogin, request: Request):
         )
         
         # client_ip를 함께 전달
-        token = await user_service.authenticate_user(login_data, client_ip)
+        token = await authenticate_user(
+            login_data.username, 
+            login_data.password, 
+            client_ip
+        )
         
         logger.info(
             f"User logged in successfully: {login_data.username}",
@@ -94,7 +95,7 @@ async def get_current_user(
 ) -> User:
     """현재 인증된 사용자 반환"""
     try:
-        user = await user_service.verify_token_and_get_user(credentials.credentials)
+        user = await verify_token_and_get_user(credentials.credentials)
         
         if not user:
             raise CustomError("INVALID_TOKEN")
