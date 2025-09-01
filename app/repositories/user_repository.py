@@ -205,17 +205,25 @@ async def get_user_by_id(user_id: int) -> Dict | None:
     """사용자 ID로 사용자 정보 조회"""
     try:
         async with postgres_manager.get_connection() as conn:
-            row = await conn.fetchrow("""
-                SELECT id, username, email, created_at, updated_at, last_login_at, last_login_ip
-                FROM users 
-                WHERE id = $1
-            """, user_id)
-            
+            row = await conn.fetchrow(
+                """
+                    SELECT 
+                        id, 
+                        username, 
+                        created_at, 
+                        updated_at, 
+                        last_login_at, 
+                        last_login_ip
+                    FROM users 
+                    WHERE id = $1
+                """, 
+                user_id
+            )
+                
             if row:
                 return {
                     "id": row['id'],
                     "username": row['username'],
-                    "email": row['email'],
                     "created_at": row['created_at'],
                     "updated_at": row['updated_at'],
                     "last_login_at": row['last_login_at'],
