@@ -1,9 +1,115 @@
 """챗 메세지 의도 분석 전담 서비스 (LLM + DB Fallback)"""
 
 import json
+from datetime import datetime, timezone
 from typing import Dict, Any, List
 from ..core.logger import logger
 from ..repositories.escape_room_repository import get_intent_patterns_from_db
+
+# 프롬프트/스키마 버전 관리
+import os
+
+# 환경변수로 프롬프트 버전 선택 (운영 중에도 변경 가능)
+CURRENT_PROMPT_VERSION = os.getenv("NLP_PROMPT_VERSION", "intent.v1.2")
+CURRENT_SCHEMA_VERSION = os.getenv("NLP_SCHEMA_VERSION", "entities.v1.2")
+
+# 프롬프트 버전별 분기 함수
+def _build_prompt_v1_2(user_message: str) -> str:
+    """기본 프롬프트 v1.2"""
+    return f"""
+[VERSION INFO]
+prompt_version: intent.v1.2
+schema_version: entities.v1.2
+
+다음 사용자 메시지의 의도를 분석해주세요.
+
+사용자 메시지: {user_message}
+
+의도를 다음 중에서 선택하고 JSON 형태로 응답하세요:
+1. "recommendation" - 방탈출 추천 요청
+2. "question" - 방탈출 관련 질문  
+3. "general_chat" - 일반적인 대화
+4. "preference_check" - 선호도 체크
+
+추가로 다음 정보도 포함해주세요:
+- confidence: 의도 파악 신뢰도 (0.0-1.0)
+- entities: 추출된 엔티티 (preferred_region, excluded_region, preferred_themes, excluded_themes, group_size, relationship, difficulty, activity_level, duration_minutes, price_per_person, group_size_min, group_size_max, company, rating)
+- reasoning: 의도 파악 근거
+
+**중요**: 
+- "공포 테마는 안돼", "호러 싫어" 같은 표현은 제외 테마(excluded_themes)로 분류
+- 선호하는 테마(preferred_themes)와 제외하는 테마(excluded_themes)를 구분해서 추출
+    - 예: 아래 테마 예시에서 공포는 excluded_themes에 들어가고, 나머지는 모두 preferred_themes에 들어간다
+- preferred_region, excluded_region도 하단 지역 예시에서 정확하게 추출
+    - 예: 사용자 요청이 "강남에서 추리 테마로 추천해줘" 일 때, preferred_region은 "강남"이고, excluded_region은 []이다
+
+**테마와 지역 예시**:
+테마: '스릴러', '기타', '판타지', '추리', '호러/공포', '잠입', '모험/탐험', '감성', '코미디', '드라마', '범죄', '미스터리', 'SF', '19금', '액션', '역사', '로맨스', '아이', '타임어택'
+지역: '서울', '강남', '강동구', '강북구', '신림', '건대', '구로구', '노원구', '동대문구', '동작구', '홍대', '신촌', '성동구', '성북구', '잠실', '양천구', '영등포구', '용산구', '은평구', '대학로', '중구', '경기', '고양', '광주', '구리', '군포', '김포', '동탄', '부천', '성남', '수원', '시흥', '안산', '안양', '용인', '의정부', '이천', '일산', '평택', '하남', '화성', '인천', '남동구', '미추홀구', '부평구', '연수구', '전북', '군산', '익산', '전주', '충남', '당진', '천안', '경남', '양산', '진주', '창원', '강원', '강릉', '원주', '춘천', '제주', '서귀포시', '제주시', '충북', '청주', '전남', '목포', '순천', '여수', '경북', '경주', '구미', '영주', '포항'
+
+**엔티티 추출 예시**:
+- "강남에서 추리 테마로 추천해줘" → {{"preferred_region": ["강남"], "preferred_themes": ["추리"]}}
+- "공포 테마는 절대 안돼" → {{"excluded_themes": ["공포"]}}
+- "2명이 할 수 있는 거" → {{"group_size": 2}}
+- "남자친구랑 할만한" → {{"relationship": "커플", "preferred_themes": ["로맨스", "드라마"]}}
+
+**응답 형식**:
+JSON 최상위에 "_meta" 객체를 포함하여 버전 정보를 추가하세요.
+
+JSON 응답:
+"""
+
+def _build_prompt_v1_3(user_message: str) -> str:
+    """개선된 프롬프트 v1.3 (더 구체적인 예시)"""
+    return f"""
+[VERSION INFO]
+prompt_version: intent.v1.3
+schema_version: entities.v1.3
+
+다음 사용자 메시지의 의도를 분석해주세요.
+
+사용자 메시지: {user_message}
+
+의도를 다음 중에서 선택하고 JSON 형태로 응답하세요:
+1. "recommendation" - 방탈출 추천 요청
+2. "question" - 방탈출 관련 질문  
+3. "general_chat" - 일반적인 대화
+4. "preference_check" - 선호도 체크
+
+추가로 다음 정보도 포함해주세요:
+- confidence: 의도 파악 신뢰도 (0.0-1.0)
+- entities: 추출된 엔티티 (preferred_region, excluded_region, preferred_themes, excluded_themes, group_size, relationship, difficulty, activity_level, duration_minutes, price_per_person, group_size_min, group_size_max, company, rating)
+- reasoning: 의도 파악 근거
+
+**중요**: 
+- "공포 테마는 안돼", "호러 싫어", "절대 안돼" 같은 표현은 제외 테마(excluded_themes)로 분류
+- 선호하는 테마(preferred_themes)와 제외하는 테마(excluded_themes)를 구분해서 추출
+- 지역은 정확하게 추출
+
+**테마와 지역 예시**:
+테마: '스릴러', '기타', '판타지', '추리', '호러/공포', '잠입', '모험/탐험', '감성', '코미디', '드라마', '범죄', '미스터리', 'SF', '19금', '액션', '역사', '로맨스', '아이', '타임어택'
+지역: '서울', '강남', '강동구', '강북구', '신림', '건대', '구로구', '노원구', '동대문구', '동작구', '홍대', '신촌', '성동구', '성북구', '잠실', '양천구', '영등포구', '용산구', '은평구', '대학로', '중구', '경기', '고양', '광주', '구리', '군포', '김포', '동탄', '부천', '성남', '수원', '시흥', '안산', '안양', '용인', '의정부', '이천', '일산', '평택', '하남', '화성', '인천', '남동구', '미추홀구', '부평구', '연수구', '전북', '군산', '익산', '전주', '충남', '당진', '천안', '경남', '양산', '진주', '창원', '강원', '강릉', '원주', '춘천', '제주', '서귀포시', '제주시', '충북', '청주', '전남', '목포', '순천', '여수', '경북', '경주', '구미', '영주', '포항'
+
+**엔티티 추출 예시**:
+- "강남에서 추리 테마로 추천해줘" → {{"preferred_region": ["강남"], "preferred_themes": ["추리"]}}
+- "공포 테마는 절대 안돼" → {{"excluded_themes": ["호러/공포"]}}
+- "호러 싫어, 스릴러도 싫어" → {{"excluded_themes": ["호러/공포", "스릴러"]}}
+- "2명이 할 수 있는 거" → {{"group_size": 2}}
+- "남자친구랑 할만한" → {{"relationship": "커플", "preferred_themes": ["로맨스", "드라마"]}}
+- "강남에서 남자친구랑 할만한 테마 추천해줘. 공포 테마는 절대 안돼" → {{"preferred_region": ["강남"], "relationship": "커플", "preferred_themes": ["로맨스"], "excluded_themes": ["호러/공포"]}}
+
+**응답 형식**:
+JSON 최상위에 "_meta" 객체를 포함하여 버전 정보를 추가하세요.
+
+JSON 응답:
+"""
+
+def _build_prompt_by_version(version: str, user_message: str) -> str:
+    """프롬프트 버전별 분기"""
+    if version == "intent.v1.3":
+        return _build_prompt_v1_3(user_message)
+    else:
+        return _build_prompt_v1_2(user_message)  # fallback
 
 
 class Intent:
@@ -40,41 +146,10 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
         from .chat_service import llm_service
         llm = llm_service.llm
         
-        prompt = f"""
-다음 사용자 메시지의 의도를 분석해주세요.
-
-사용자 메시지: {user_message}
-
-의도를 다음 중에서 선택하고 JSON 형태로 응답하세요:
-1. "recommendation" - 방탈출 추천 요청
-2. "question" - 방탈출 관련 질문  
-3. "general_chat" - 일반적인 대화
-4. "preference_check" - 선호도 체크
-
-추가로 다음 정보도 포함해주세요:
-- confidence: 의도 파악 신뢰도 (0.0-1.0)
-- entities: 추출된 엔티티 (preferred_region, excluded_region, preferred_themes, excluded_themes, group_size, relationship, difficulty, activity_level, duration_minutes, price_per_person, group_size_min, group_size_max, company, rating)
-- reasoning: 의도 파악 근거
-
-**중요**: 
-- "공포 테마는 안돼", "호러 싫어" 같은 표현은 제외 테마(excluded_themes)로 분류
-- 선호하는 테마(preferred_themes)와 제외하는 테마(excluded_themes)를 구분해서 추출
-    - 예: 아래 테마 예시에서 공포는 excluded_themes에 들어가고, 나머지는 모두 preferred_themes에 들어간다
-- preferred_region, excluded_region도 하단 지역 예시에서 정확하게 추출
-    - 예: 사용자 요청이 "강남에서 추리 테마로 추천해줘" 일 때, preferred_region은 "강남"이고, excluded_region은 []이다
-
-**테마와 지역 예시**:
-테마: '스릴러', '기타', '판타지', '추리', '호러/공포', '잠입', '모험/탐험', '감성', '코미디', '드라마', '범죄', '미스터리', 'SF', '19금', '액션', '역사', '로맨스', '아이', '타임어택'
-지역: '서울', '강남', '강동구', '강북구', '신림', '건대', '구로구', '노원구', '동대문구', '동작구', '홍대', '신촌', '성동구', '성북구', '잠실', '양천구', '영등포구', '용산구', '은평구', '대학로', '중구', '경기', '고양', '광주', '구리', '군포', '김포', '동탄', '부천', '성남', '수원', '시흥', '안산', '안양', '용인', '의정부', '이천', '일산', '평택', '하남', '화성', '인천', '남동구', '미추홀구', '부평구', '연수구', '전북', '군산', '익산', '전주', '충남', '당진', '천안', '경남', '양산', '진주', '창원', '강원', '강릉', '원주', '춘천', '제주', '서귀포시', '제주시', '충북', '청주', '전남', '목포', '순천', '여수', '경북', '경주', '구미', '영주', '포항'
-
-**엔티티 추출 예시:**
-- "강남에서 추리 테마로 추천해줘" → {{"preferred_region": ["강남"], "preferred_themes": ["추리"]}}
-- "공포 테마는 절대 안돼" → {{"excluded_themes": ["공포"]}}
-- "2명이 할 수 있는 거" → {{"group_size": 2}}
-- "남자친구랑 할만한" → {{"relationship": "커플", "preferred_themes": ["로맨스", "드라마"]}}
-
-JSON 응답:
-"""
+        prompt = _build_prompt_by_version(
+            CURRENT_PROMPT_VERSION, 
+            user_message
+        )
         
         # LangChain 방식으로 호출
         from langchain.schema import HumanMessage
@@ -86,6 +161,15 @@ JSON 응답:
         # JSON 파싱
         try:
             intent_data = json.loads(response_text)
+            
+            # 메타데이터 주입 (LLM이 포함하지 않은 경우 대비)
+            if "_meta" not in intent_data:
+                intent_data["_meta"] = {}
+            
+            intent_data["_meta"].setdefault("prompt_version", CURRENT_PROMPT_VERSION)
+            intent_data["_meta"].setdefault("schema_version", CURRENT_SCHEMA_VERSION)
+            intent_data["_meta"].setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+            
             return intent_data
         except json.JSONDecodeError:
             logger.warning("LLM response JSON parsing failed")
