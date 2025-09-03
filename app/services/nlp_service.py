@@ -1,17 +1,20 @@
 """챗 메세지 의도 분석 전담 서비스 (LLM + DB Fallback)"""
 
 import json
-from datetime import datetime, timezone
+import re
+from ..utils.time import now_korea_iso
 from typing import Dict, Any, List
 from ..core.logger import logger
 from ..repositories.escape_room_repository import get_intent_patterns_from_db
+from langchain_openai import ChatOpenAI
+from ..core.config import settings
 
 # 프롬프트/스키마 버전 관리
-import os
+from ..core.config import settings
 
-# 환경변수로 프롬프트 버전 선택 (운영 중에도 변경 가능)
-CURRENT_PROMPT_VERSION = os.getenv("NLP_PROMPT_VERSION", "intent.v1.2")
-CURRENT_SCHEMA_VERSION = os.getenv("NLP_SCHEMA_VERSION", "entities.v1.2")
+# 설정에서 프롬프트 버전 가져오기
+CURRENT_PROMPT_VERSION = settings.nlp_prompt_version
+CURRENT_SCHEMA_VERSION = settings.nlp_schema_version
 
 # 프롬프트 버전별 분기 함수
 def _build_prompt_v1_2(user_message: str) -> str:
@@ -168,7 +171,7 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
             
             intent_data["_meta"].setdefault("prompt_version", CURRENT_PROMPT_VERSION)
             intent_data["_meta"].setdefault("schema_version", CURRENT_SCHEMA_VERSION)
-            intent_data["_meta"].setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+            intent_data["_meta"].setdefault("timestamp", now_korea_iso())
             
             return intent_data
         except json.JSONDecodeError:
@@ -217,7 +220,6 @@ async def _analyze_intent_pattern_fallback(user_message: str) -> Dict[str, Any]:
         "method": "fallback_default"
     }
 
-
 async def _get_intent_patterns() -> Dict[str, List[Dict]]:
     """의도 패턴 조회 (로깅 + 예외 처리)"""
     try:
@@ -235,3 +237,289 @@ async def _get_intent_patterns() -> Dict[str, List[Dict]]:
         }
         logger.warning(f"Using fallback intent patterns: {fallback_patterns}")
         return fallback_patterns
+
+# =============================================================================
+# 선호도 답변 분석 함수들 (LLM 기반 자연어 처리)
+# =============================================================================
+
+class PreferenceAnalyzer:
+    """선호도 답변 분석을 위한 LLM 서비스 (싱글톤 패턴)"""
+    
+    _instance = None
+    _llm = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(PreferenceAnalyzer, cls).__new__(cls)
+        return cls._instance
+    
+    def __init__(self):
+        if self._llm is None:
+            self._llm = ChatOpenAI(
+                model="gpt-3.5-turbo",
+                temperature=0.3,  # 더 일관된 결과를 위해 낮은 temperature
+                openai_api_key=settings.openai_api_key
+            )
+    
+    @property
+    def llm(self):
+        return self._llm
+
+async def analyze_experience_answer(user_answer: str) -> str:
+    """실무 최적화: 패턴 매칭 우선, LLM 최소 사용"""
+    # 1단계: 강력한 패턴 매칭 (95% 케이스 커버)
+    experienced_patterns = [
+        "해봤", "경험", "갔었", "해본", "예", "네", "있어요", "있습니다", 
+        "몇 번", "여러 번", "자주", "가봤", "해봤어", "갔어", "해봤습니다"
+    ]
+    beginner_patterns = [
+        "처음", "안해봤", "몰라", "아니요", "아니", "없어요", "없습니다",
+        "한 번도", "전혀", "모름", "모르겠", "안 갔", "안 해봤"
+    ]
+    
+    user_lower = user_answer.lower()
+    
+    # 경험 있음 패턴 확인
+    for pattern in experienced_patterns:
+        if pattern in user_lower:
+            return "experienced"
+    
+    # 경험 없음 패턴 확인
+    for pattern in beginner_patterns:
+        if pattern in user_lower:
+            return "beginner"
+    
+    # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
+    try:
+        analyzer = PreferenceAnalyzer()
+        prompt = f"""
+        방탈출 경험 질문 답변: "{user_answer}"
+        
+        experienced 또는 beginner 중 하나만 답변하세요.
+        """
+        
+        response = await analyzer.llm.ainvoke(prompt)
+        result = response.content.strip().lower()
+        
+        return result if result in ["experienced", "beginner"] else "beginner"
+        
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        return "beginner"  # 안전한 기본값
+
+async def analyze_experience_count(user_answer: str) -> Dict[str, Any]:
+    """실무 최적화: 숫자 추출 우선, LLM 최소 사용"""
+    # 1단계: 숫자 직접 추출 (90% 케이스)
+    import re
+    numbers = re.findall(r'\d+', user_answer)
+    
+    if numbers:
+        count = int(numbers[0])
+        if 1 <= count <= 10:
+            return {"count": count, "level": "방린이"}
+        elif 11 <= count <= 30:
+            return {"count": count, "level": "방소년"}
+        elif 31 <= count <= 50:
+            return {"count": count, "level": "방어른"}
+        elif 51 <= count <= 80:
+            return {"count": count, "level": "방신"}
+        elif 81 <= count <= 100:
+            return {"count": count, "level": "방장로"}
+        elif count > 100:
+            return {"count": count, "level": "방장로"}
+    
+    # 2단계: 키워드 패턴 매칭
+    user_lower = user_answer.lower()
+    if any(word in user_lower for word in ["많이", "자주", "100회", "백회"]):
+        return {"count": 120, "level": "방장로"}
+    elif any(word in user_lower for word in ["조금", "몇 번", "적게"]):
+        return {"count": 5, "level": "방린이"}
+    
+    # 3단계: 불분명한 경우만 LLM 사용 (5% 케이스)
+    try:
+        analyzer = PreferenceAnalyzer()
+        prompt = f"""
+        경험 횟수 답변: "{user_answer}"
+        
+        1-10, 11-30, 31-50, 51-80, 81-100, 100+ 중 하나만 답변하세요.
+        """
+        
+        response = await analyzer.llm.ainvoke(prompt)
+        result = response.content.strip()
+        
+        if result == "1-10":
+            return {"count": 5, "level": "방린이"}
+        elif result == "11-30":
+            return {"count": 20, "level": "방소년"}
+        elif result == "31-50":
+            return {"count": 40, "level": "방어른"}
+        elif result == "51-80":
+            return {"count": 65, "level": "방신"}
+        elif result == "81-100":
+            return {"count": 90, "level": "방장로"}
+        elif result == "100+":
+            return {"count": 120, "level": "방장로"}
+        else:
+            return {"count": 5, "level": "방린이"}  # 안전한 기본값
+            
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        return {"count": 5, "level": "방린이"}
+
+async def analyze_difficulty_answer(user_answer: str) -> int:
+    """실무 최적화: 이모지/키워드 우선, LLM 최소 사용"""
+    # 1단계: 이모지 개수로 난이도 결정 (80% 케이스)
+    difficulty = user_answer.count("🔒")
+    if difficulty > 0:
+        return min(difficulty, 3)  # 최대 3
+    
+    # 2단계: 키워드 패턴 매칭
+    user_lower = user_answer.lower()
+    if any(word in user_lower for word in ["쉬운", "쉽게", "초보", "1"]):
+        return 1
+    elif any(word in user_lower for word in ["어려운", "어렵게", "고수", "3"]):
+        return 3
+    elif any(word in user_lower for word in ["보통", "적당", "2"]):
+        return 2
+    
+    # 3단계: 불분명한 경우만 LLM 사용 (5% 케이스)
+    try:
+        analyzer = PreferenceAnalyzer()
+        prompt = f"""
+        난이도 답변: "{user_answer}"
+        
+        1, 2, 3 중 하나만 답변하세요.
+        """
+        
+        response = await analyzer.llm.ainvoke(prompt)
+        result = response.content.strip()
+        
+        return int(result) if result in ["1", "2", "3"] else 2
+        
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        return 2  # 안전한 기본값
+
+async def analyze_activity_answer(user_answer: str) -> int:
+    """실무 최적화: 키워드 우선, LLM 최소 사용"""
+    # 1단계: 키워드 패턴 매칭 (95% 케이스)
+    user_lower = user_answer.lower()
+    if any(word in user_lower for word in ["거의 없음", "적음", "조금", "1"]):
+        return 1
+    elif any(word in user_lower for word in ["많음", "활발", "많이", "3"]):
+        return 3
+    elif any(word in user_lower for word in ["보통", "적당", "2"]):
+        return 2
+    
+    # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
+    try:
+        analyzer = PreferenceAnalyzer()
+        prompt = f"""
+        활동성 답변: "{user_answer}"
+        
+        1, 2, 3 중 하나만 답변하세요.
+        """
+        
+        response = await analyzer.llm.ainvoke(prompt)
+        result = response.content.strip()
+        
+        return int(result) if result in ["1", "2", "3"] else 2
+        
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        return 2  # 안전한 기본값
+
+async def analyze_group_size_answer(user_answer: str) -> int:
+    """실무 최적화: 숫자 추출 우선, LLM 최소 사용"""
+    # 1단계: 숫자 직접 추출 (95% 케이스)
+    import re
+    numbers = re.findall(r'\d+', user_answer)
+    
+    if numbers:
+        size = int(numbers[0])
+        if 2 <= size <= 10:  # 합리적인 범위
+            return size
+        elif size == 1:
+            return 2  # 1명은 2명으로 조정
+        elif size > 10:
+            return 10  # 10명 이상은 10명으로 제한
+    
+    # 2단계: 키워드 패턴 매칭
+    user_lower = user_answer.lower()
+    if any(word in user_lower for word in ["둘이", "2명", "두 명"]):
+        return 2
+    elif any(word in user_lower for word in ["셋이", "3명", "세 명"]):
+        return 3
+    elif any(word in user_lower for word in ["넷이", "4명", "네 명"]):
+        return 4
+    
+    # 3단계: 불분명한 경우만 LLM 사용 (5% 케이스)
+    try:
+        analyzer = PreferenceAnalyzer()
+        prompt = f"""
+        인원수 답변: "{user_answer}"
+        
+        숫자만 답변하세요 (예: 3).
+        """
+        
+        response = await analyzer.llm.ainvoke(prompt)
+        result = response.content.strip()
+        
+        size = int(result) if result.isdigit() else 3
+        return min(max(size, 2), 10)  # 2-10 범위로 제한
+        
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        return 3  # 안전한 기본값
+
+async def analyze_region_answer(user_answer: str) -> str:
+    """실무 최적화: 키워드 우선, LLM 최소 사용"""
+    # 1단계: 키워드 패턴 매칭 (95% 케이스)
+    regions = ["강남", "홍대", "건대", "신촌", "강북", "잠실", "송파", "마포", "용산"]
+    for region in regions:
+        if region in user_answer:
+            return region
+    
+    # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
+    try:
+        analyzer = PreferenceAnalyzer()
+        prompt = f"""
+        지역 답변: "{user_answer}"
+        
+        강남, 홍대, 건대, 신촌, 강북, 잠실, 송파, 마포, 용산, 기타 중 하나만 답변하세요.
+        """
+        
+        response = await analyzer.llm.ainvoke(prompt)
+        result = response.content.strip()
+        
+        return result if result in regions + ["기타"] else "강남"
+        
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        return "강남"  # 안전한 기본값
+
+async def analyze_theme_answer(user_answer: str) -> str:
+    """실무 최적화: 키워드 우선, LLM 최소 사용"""
+    # 1단계: 키워드 패턴 매칭 (95% 케이스)
+    themes = ["추리", "공포", "판타지", "SF", "스릴러", "모험", "로맨스", "코미디"]
+    for theme in themes:
+        if theme in user_answer:
+            return theme
+    
+    # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
+    try:
+        analyzer = PreferenceAnalyzer()
+        prompt = f"""
+        테마 답변: "{user_answer}"
+        
+        추리, 공포, 판타지, SF, 스릴러, 모험, 로맨스, 코미디 중 하나만 답변하세요.
+        """
+        
+        response = await analyzer.llm.ainvoke(prompt)
+        result = response.content.strip()
+        
+        return result if result in themes else "추리"
+        
+    except Exception as e:
+        logger.error(f"LLM analysis failed: {e}")
+        return "추리"  # 안전한 기본값

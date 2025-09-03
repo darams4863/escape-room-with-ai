@@ -29,6 +29,9 @@ class CustomError(Exception):
         # 방탈출 에러 (203xxx)
         "ROOM_NOT_FOUND": ("203001", "방탈출을 찾을 수 없습니다.", 404),
         "INVALID_DIFFICULTY": ("203002", "유효하지 않은 난이도입니다.", 422),
+        
+        # Rate Limiting 에러 (204xxx)
+        "RATE_LIMIT_EXCEEDED": ("204001", "요청 한도를 초과했습니다.", 429),
     }
     
     def __init__(self, error_key: str, custom_message: str = None, **format_args):

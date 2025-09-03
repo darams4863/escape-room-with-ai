@@ -3,6 +3,7 @@
 from typing import Dict, Any, List
 from ..models.escape_room import EscapeRoom
 from ..core.logger import logger
+from ..core.redis_manager import redis_manager
 from .nlp_service import analyze_intent
 from ..repositories.escape_room_repository import get_embedding_based_recommendations
 
@@ -10,8 +11,20 @@ async def get_escape_room_recommendations(
     user_message: str, 
     user_prefs: Dict[str, Any]
 ) -> List[EscapeRoom]:
-    """사용자 메세지에 따른 추천 방탈출 목록 반환"""
+    """사용자 메세지에 따른 추천 방탈출 목록 반환 (캐싱 적용)"""
     try:
+        # 1. 캐시 키 생성
+        cache_key = redis_manager.generate_recommendation_cache_key(user_message, user_prefs)
+        
+        # 2. 캐시에서 먼저 조회
+        cached_recommendations = await redis_manager.get_cached_recommendations(cache_key)
+        if cached_recommendations:
+            logger.info(f"Cache hit for recommendations: {cache_key}")
+            return [EscapeRoom(**rec) for rec in cached_recommendations]
+        
+        # 3. 캐시 미스 시 새로 계산
+        logger.info(f"Cache miss for recommendations: {cache_key}")
+        
         # NLP 분석으로 의도와 엔티티 추출 (LLM 기반)
         intent_analysis = await analyze_intent(user_message)
 
@@ -59,6 +72,11 @@ async def get_escape_room_recommendations(
                 intent_analysis={intent_analysis}
             """
         )
+        
+        # 4. 결과를 캐시에 저장
+        if recommendations:
+            recommendations_data = [rec.dict() for rec in recommendations]
+            await redis_manager.cache_recommendations(cache_key, recommendations_data)
         
         return recommendations
         

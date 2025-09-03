@@ -1,6 +1,7 @@
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
+from .time import now_korea
 from typing import Dict, Any
 from ..core.config import settings
 from ..core.logger import logger
@@ -42,14 +43,14 @@ class JWTManager:
         """JWT 액세스 토큰 생성"""
         try:
             # 토큰 만료 시간 계산
-            expire = datetime.utcnow() + timedelta(hours=settings.jwt_expire_hours)
+            expire = now_korea() + timedelta(hours=settings.jwt_expire_hours)
             
             # 페이로드 생성
             payload = {
                 "user_id": user_id,
                 "username": username,
                 "exp": expire,
-                "iat": datetime.utcnow()
+                "iat": now_korea()
             }
             
             # JWT 토큰 생성

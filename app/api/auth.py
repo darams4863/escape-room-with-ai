@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from ..core.logger import logger, get_user_logger
 from ..core.exceptions import CustomError
 from ..models.user import User, UserCreate, UserLogin, Token
-from ..services.user_service import create_user, authenticate_user, verify_token_and_get_user
+from ..services.user_service import create_user, authenticate_user, get_current_user_from_token
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer()
@@ -93,15 +93,9 @@ async def login(login_data: UserLogin, request: Request):
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> User:
-    """현재 인증된 사용자 반환"""
+    """현재 인증된 사용자 반환 (FastAPI 의존성 주입용)"""
     try:
-        user = await verify_token_and_get_user(credentials.credentials)
-        
-        if not user:
-            raise CustomError("INVALID_TOKEN")
-        
-        return user
-        
+        return await get_current_user_from_token(credentials.credentials)
     except CustomError as e:
         logger.warning(f"Authentication failed: {e.message}")
         raise e.to_http_exception()
@@ -123,10 +117,4 @@ async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@router.get("/health",
-    summary="인증 서비스 헬스 체크",
-    description="인증 서비스 헬스 체크를 위한 API"
-)
-async def health_check():
-    """인증 서비스 헬스 체크"""
-    return {"status": "healthy", "service": "auth-service"}
+

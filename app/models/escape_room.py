@@ -1,7 +1,7 @@
-import pytz
 from pydantic import BaseModel, Field, field_validator
 from typing import List
 from datetime import datetime
+from ..utils.time import korea_time_field, to_korea_time
 
 
 class EscapeRoomBase(BaseModel):
@@ -33,13 +33,7 @@ class EscapeRoom(EscapeRoomBase):
     @classmethod
     def format_datetime(cls, v):
         """시간을 한국 시간으로 포맷팅"""
-        if isinstance(v, datetime):
-            # UTC 시간을 한국 시간으로 변환
-            korea_tz = pytz.timezone('Asia/Seoul')
-            if v.tzinfo is None:
-                v = pytz.UTC.localize(v)
-            return v.astimezone(korea_tz)
-        return v
+        return to_korea_time(v) if isinstance(v, datetime) else v
 
     class Config:
         from_attributes = True
@@ -48,55 +42,18 @@ class EscapeRoom(EscapeRoomBase):
         }
 
 
-class UserPreferenceBase(BaseModel):
-    """Base user preference model"""
-    experience_level: str = Field(default="beginner", description="경험 수준")
-    preferred_difficulty: int | None = Field(None, ge=1, le=5, description="선호 난이도")
-    preferred_activity_level: int | None = Field(None, ge=1, le=5, description="선호 활동성")
-    preferred_regions: List[str] = Field(default=[], description="선호 지역")
-    preferred_group_size: int | None = Field(None, ge=1, description="선호 그룹 크기")
-
-
-class UserPreferenceCreate(UserPreferenceBase):
-    """Create user preference model"""
-    user_id: str = Field(..., description="사용자 ID")
-
-
-class UserPreference(UserPreferenceBase):
-    """User preference model with ID and timestamps"""
-    id: int
-    user_id: str
-    created_at: datetime
-    updated_at: datetime
-    
-    class Config:
-        from_attributes = True
-
-
 class ChatMessage(BaseModel):
     """Chat message model"""
     role: str = Field(..., description="메시지 역할 (user/assistant)")
     content: str = Field(..., description="메시지 내용")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-
-
-class ChatSession(BaseModel):
-    """Chat session model"""
-    session_id: str = Field(..., description="세션 ID")
-    user_id: str | None = Field(None, description="사용자 ID")
-    conversation_history: List[ChatMessage] = Field(default=[], description="대화 기록")
-    created_at: datetime
-    updated_at: datetime
-    
-    class Config:
-        from_attributes = True
+    timestamp: datetime = Field(default_factory=korea_time_field)
 
 
 class ChatRequest(BaseModel):
     """Chat request model"""
     message: str = Field(..., description="사용자 메시지")
     session_id: str | None = Field(None, description="세션 ID")
-    user_id: str | None = Field(None, description="사용자 ID")
+    # user_id: str | None = Field(None, description="사용자 ID")
 
 
 class ChatResponse(BaseModel):
@@ -116,5 +73,5 @@ class ChatResponse(BaseModel):
     entities: dict | None = Field(None, description="엔티티 추출 결과")
     
     # 챗봇 상태
-    chat_type: str = Field(default="general", description="채팅 타입 (questionnaire/recommendation/general)")
+    # chat_type: str = Field(default="general", description="채팅 타입 (questionnaire/recommendation/general)")
     is_questionnaire_active: bool = Field(default=False, description="방린이 테스트 진행 중 여부")

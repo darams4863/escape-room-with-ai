@@ -74,3 +74,49 @@ RECOMMENDATION_WEIGHTS = {
     "activity": 0.15,
     "price": 0.1
 }
+
+# 선호도 파악 단계 정의
+PREFERENCE_STEPS = {
+    "experience_check": {
+        "next": "experience_count",
+        "question": "방탈출은 해보신 적 있나요?",
+        "options": ["네, 해봤어요!", "아니요, 처음이에요."],
+        "field": "experience_level"
+    },
+    "experience_count": {
+        "next": "difficulty_check",
+        "question": "몇 번 정도 해보셨어요?",
+        "options": ["1-10회", "11-30회", "31-50회", "51-80회", "81-100회", "100회 이상"],
+        "field": "experience_count"
+    },
+    "difficulty_check": {
+        "next": "activity_level_check", 
+        "question": "어떤 난이도를 선호하시나요?",
+        "options": ["🔒", "🔒🔒", "🔒🔒🔒", "🔒🔒🔒🔒", "🔒🔒🔒🔒🔒"],
+        "field": "preferred_difficulty"
+    },
+    "activity_level_check": {
+        "next": "group_size_check",
+        "question": "활동성을 선호하시나요?",
+        "options": ["거의 없음", "보통", "많음"],
+        "field": "preferred_activity_level"
+    },
+    "group_size_check": {
+        "next": "region_check",
+        "question": "몇 명이서 가시나요?",
+        "options": ["2명", "3명", "4명", "5명", "6명 이상"],
+        "field": "preferred_group_size"
+    },
+    "region_check": {
+        "next": "theme_check",
+        "question": "어느 지역을 선호하시나요?",
+        "options": ["강남", "홍대", "건대", "신촌", "기타"],
+        "field": "preferred_regions"
+    },
+    "theme_check": {
+        "next": None,
+        "question": "어떤 테마를 선호하시나요?",
+        "options": ["추리", "공포", "로맨스", "판타지", "SF", "역사", "액션"],
+        "field": "preferred_themes"
+    }
+}

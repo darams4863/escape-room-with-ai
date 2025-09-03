@@ -1,6 +1,7 @@
 import time
 import uuid
 from datetime import datetime
+from .utils.time import now_korea_iso
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -173,7 +174,7 @@ async def health_check():
             "status": "healthy" if health_status["overall"] else "unhealthy",
             "service": settings.app_name,
             "version": settings.app_version,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_korea_iso(),
             "connections": {
                 "postgres": "✅" if health_status["postgres"] else "❌",
                 "redis": "✅" if health_status["redis"] else "❌"

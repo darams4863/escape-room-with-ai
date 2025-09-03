@@ -2,7 +2,7 @@
 
 from typing import List, Dict, Any
 from ..core.logger import logger
-from ..core.connections import postgres_manager, redis_manager
+from ..core.connections import postgres_manager
 
 # nlp_service.py에서 사용
 async def get_intent_patterns_from_db() -> Dict[str, List[Dict]]:
@@ -143,11 +143,13 @@ async def get_embedding_based_recommendations(
                 1 - (embedding <=> $1::vector) AS similarity
             FROM escape_rooms
             {where_sql}
-            ORDER BY similarity DESC, rating DESC NULLS LAST
+            -- cf. rating(0~5)을 0~1로 정규화해 15% 가중치로 합산하여 추천 랭킹에 평점 가중치를 높인다
+            ORDER BY (0.85 * similarity + 0.15 * COALESCE(rating / 5.0, 0)) DESC
             LIMIT ${idx}
         """
 
-        args = [query_embedding] + params + [10]  # limit 고정(필요 시 서비스에서 인자 추가)
+        # 상위 5개만 반환
+        args = [query_embedding] + params + [5]  # limit 고정(필요 시 서비스에서 인자 추가)
         async with postgres_manager.get_connection() as conn:
             rows = await conn.fetch(query, *args)
 

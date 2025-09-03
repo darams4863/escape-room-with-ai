@@ -123,6 +123,7 @@ dmypy.json
 .pyre/
 
 # Project specific
+tests/
 data/
 logs/
 *.log

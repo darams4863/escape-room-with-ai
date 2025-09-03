@@ -11,7 +11,7 @@ import time
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from dataclasses import dataclass, asdict
 from threading import Lock
 from collections import defaultdict
@@ -27,7 +27,7 @@ class APIUsageMetric:
     estimated_cost_usd: float
     response_time_ms: float
     success: bool
-    error_type: Optional[str] = None
+    error_type: str | None = None
     batch_size: int = 1
     
 @dataclass  
@@ -67,7 +67,7 @@ class MetricsCollector:
                       total_tokens: int,
                       response_time_ms: float,
                       success: bool = True,
-                      error_type: Optional[str] = None,
+                      error_type: str | None = None,
                       batch_size: int = 1) -> APIUsageMetric:
         """OpenAI API 호출 추적"""
         
@@ -133,7 +133,7 @@ class MetricsCollector:
         except Exception as e:
             print(f"⚠️ 메트릭 저장 실패: {e}")
     
-    def get_daily_summary(self, date: Optional[str] = None) -> Dict[str, Any]:
+    def get_daily_summary(self, date: str | None = None) -> Dict[str, Any]:
         """일일 사용량 요약"""
         if not date:
             date = datetime.now().strftime("%Y-%m-%d")
@@ -269,17 +269,22 @@ class VectorizationSession:
 metrics_collector = MetricsCollector()
 
 # 편의 함수들
-def track_openai_call(model: str, operation: str, input_tokens: int, 
-                     total_tokens: int, response_time_ms: float, 
-                     success: bool = True, error_type: Optional[str] = None,
-                     batch_size: int = 1) -> APIUsageMetric:
+def track_openai_call(
+    model: str, 
+    operation: str, 
+    input_tokens: int, 
+    total_tokens: int, 
+    response_time_ms: float, 
+    success: bool = True, 
+    error_type: str | None = None,
+    batch_size: int = 1) -> APIUsageMetric:
     """OpenAI API 호출 추적 (전역 함수)"""
     return metrics_collector.track_api_call(
         model, operation, input_tokens, total_tokens, 
         response_time_ms, success, error_type, batch_size
     )
 
-def get_daily_usage(date: Optional[str] = None) -> Dict[str, Any]:
+def get_daily_usage(date: str | None = None) -> Dict[str, Any]:
     """일일 사용량 조회"""
     return metrics_collector.get_daily_summary(date)
 

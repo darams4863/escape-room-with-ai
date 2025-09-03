@@ -16,6 +16,7 @@ from ..repositories.user_repository import (
     update_last_login, 
 )
 
+
 async def create_user(username: str, password: str) -> User:
     """사용자 생성"""
     try:
@@ -141,19 +142,20 @@ async def verify_token_and_get_user(token: str) -> User | None:
         logger.error(f"Token verification error: {e}")
         return None
 
-async def check_user_preferences(user_id: int) -> bool:
-    """사용자 선호도 조회"""
-    user_prefs = await get_user_preferences(user_id)
-    if not user_prefs:
-        return False
-    if (user_prefs.get('experience_level') is None or 
-        user_prefs.get('preferred_difficulty') is None or 
-        user_prefs.get('preferred_activity_level') is None or 
-        user_prefs.get('preferred_regions') is None or 
-        user_prefs.get('preferred_group_size') is None or 
-        user_prefs.get('preferred_themes') is None):
-        return False
-    return True
+async def get_current_user_from_token(token: str) -> User:
+    """토큰에서 현재 사용자 정보 추출 (서비스 레이어)"""
+    try:
+        user = await verify_token_and_get_user(token)
+        if not user:
+            raise CustomError("INVALID_TOKEN")
+        return user
+    except CustomError:
+        raise
+    except Exception as e:
+        logger.error(f"Get current user error: {e}")
+        raise CustomError("AUTH_ERROR", "사용자 인증 중 오류가 발생했습니다.")
+
+
 
 # Redis 토큰 관리 헬퍼 함수들
 async def _store_token_in_redis(user_id: int, token: str, expire_seconds: int = 3600):

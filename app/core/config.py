@@ -49,10 +49,15 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 1
     
+    # NLP Prompt/Schema Versioning (선택사항)
+    nlp_prompt_version: str = "intent.v1.2"
+    nlp_schema_version: str = "entities.v1.2"
+    
     class Config:
         # 우선순위: 1. 환경변수 2. .env 파일 3. 기본값
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # 추가 필드 허용
 
 
 settings = Settings()

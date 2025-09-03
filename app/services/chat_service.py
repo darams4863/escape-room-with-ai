@@ -3,13 +3,13 @@
 import re
 import uuid
 import json
-from datetime import datetime, timezone
+from ..utils.time import now_korea_iso
 from typing import List, Dict, Any
 
 from ..core.logger import logger
 from ..core.connections import redis_manager
-from ..core.constants import EXPERIENCE_LEVELS, get_experience_level
-from langchain.chains import LLMChain
+from ..core.constants import PREFERENCE_STEPS
+
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
@@ -22,10 +22,18 @@ from ..repositories.chat_repository import (
     create_session, 
     update_session,
     get_session_by_id,
-    update_session_activity
 )
 from ..repositories.user_repository import upsert_user_preferences
-from .nlp_service import analyze_intent
+from .nlp_service import (
+    analyze_intent,
+    analyze_experience_answer,
+    analyze_experience_count,
+    analyze_difficulty_answer,
+    analyze_activity_answer,
+    analyze_group_size_answer,
+    analyze_region_answer,
+    analyze_theme_answer
+)
 
 # LLM 관련만 클래스로 유지 (상태 관리 필요)
 class LLMService:
@@ -74,7 +82,8 @@ class LLMService:
 """
         )
         
-        self.chain = LLMChain(llm=self.llm, prompt=self.chat_prompt)
+        # LLMChain 대신 최신 방식 사용
+        self.chain = self.chat_prompt | self.llm
     
     async def generate_response(self, conversation_history: List[ChatMessage], user_level: str, user_prefs: Dict) -> str:
         """LLM을 사용하여 경험 등급별 맞춤 응답 생성"""
@@ -87,15 +96,15 @@ class LLMService:
             # 사용자 선호사항 요약
             prefs_summary = _format_user_preferences(user_prefs)
             
-            # 랭체인 실행
-            response = await self.chain.arun(
-                conversation_history=history_text,
-                user_message=conversation_history[-1].content,
-                user_level=user_level,
-                user_preferences=prefs_summary
-            )
+            # 랭체인 실행 (최신 방식)
+            response = await self.chain.ainvoke({
+                "conversation_history": history_text,
+                "user_message": conversation_history[-1].content,
+                "user_level": user_level,
+                "user_preferences": prefs_summary
+            })
             
-            return response.strip()
+            return response.content.strip()
             
         except Exception as e:
             logger.error(f"Response generation error: {e}")
@@ -118,7 +127,7 @@ async def _save_conversation(session_id: str, conversation_history: List[ChatMes
     """대화 저장 (Redis + PostgreSQL)"""
     messages_data = []
     for msg in conversation_history:
-        timestamp = msg.timestamp.isoformat() if msg.timestamp else datetime.now(timezone.utc).isoformat()
+        timestamp = msg.timestamp.isoformat() if msg.timestamp else now_korea_iso()
         messages_data.append({
             "role": msg.role,
             "content": msg.content,
@@ -166,56 +175,11 @@ def _parse_messages(data: Any) -> List[ChatMessage]:
 
 # ===== 함수 기반 서비스들 =====
 
-# 선호도 파악 단계 정의
-PREFERENCE_STEPS = {
-    "experience_check": {
-        "next": "experience_count",
-        "question": "방탈출은 해보신 적 있나요?",
-        "options": ["네, 해봤어요!", "아니요, 처음이에요."],
-        "field": "experience_level"
-    },
-    "experience_count": {
-        "next": "difficulty_check",
-        # cf. 방생아 > 방린이 > 방소년 > 방어른 > 방신 > 방장로
-        "question": "몇 번 정도 해보셨어요?",
-        "options": ["1-10회", "11-30회", "31-50회", "51-80회", "81-100회", "100회 이상"],
-        "field": "experience_count"
-    },
-    "difficulty_check": {
-        "next": "activity_level_check", 
-        "question": "어떤 난이도를 선호하시나요?",
-        "options": ["🔒", "🔒🔒", "🔒🔒🔒", "🔒🔒🔒🔒", "🔒🔒🔒🔒🔒"],
-        "field": "preferred_difficulty"
-    },
-    "activity_level_check": {
-        "next": "group_size_check",
-        "question": "활동성을 선호하시나요?",
-        "options": ["거의 없음", "보통", "많음"],
-        "field": "preferred_activity_level"
-    },
-    "group_size_check": {
-        "next": "region_check",
-        "question": "그룹 크기는 2-4명 중에 어떤 것을 선호하시나요?",
-        "options": ["2명", "3명", "4명"],
-        "field": "preferred_group_size"
-    },
-    "region_check": {
-        "next": "themes_check",
-        "question": "선호하시는 지역이 있나요?",
-        "options": ["서울", "경기", "부산", "대구", "인천"],
-        "field": "preferred_regions"
-    },
-    "themes_check": {
-        "next": None,  # 마지막 단계
-        "question": "어떤 테마를 선호하시나요? 여러개도 선택 가능합니다!",
-        "options": ["스릴러", "기타", "판타지", "추리", "호러/공포", "잠입", "모험/탐험", "감성", "코미디", "드라마", "범죄", "미스터리", "SF", "19금", "액션", "역사", "로맨스", "아이", "타임어택"],
-        "field": "preferred_themes"
-    }
-}
+
 
 async def chat_with_user(session_id: str, user_prefs: Dict, user_message: str, user_id: int) -> ChatResponse:    
     """통합 채팅 처리 - 선호도 파악 + 방탈출 추천"""
-        # 대화 기록 로드
+    # 대화 기록 로드
     conversation_history = await _load_conversation(session_id)
     
     # 1. 선호도 파악이 필요한 경우
@@ -270,8 +234,123 @@ async def handle_preference_flow(
     )
 
 async def _get_current_preference_step(session_id: str) -> str | None:
-    """현재 진행 중인 선호도 파악 단계 조회"""
-    return await redis_manager.get(f"preference_step:{session_id}")
+    """현재 진행 중인 선호도 파악 단계 조회 (Redis 우선, 실패 시 DB 복구)"""
+    try:
+        # 1. Redis에서 먼저 확인
+        current_step = await redis_manager.get(f"preference_step:{session_id}")
+        if current_step:
+            logger.info(f"Found preference step in Redis: {current_step}")
+            return current_step
+        
+        # 2. Redis에 없으면 DB에서 복구 시도
+        logger.info("No preference step in Redis, attempting DB recovery...")
+        return await _recover_preference_step_from_db(session_id)
+        
+    except Exception as e:
+        logger.error(f"Error getting preference step: {e}")
+        return None
+
+async def _recover_preference_step_from_db(session_id: str) -> str | None:
+    """DB의 conversation_history에서 선호도 진행 상황 복구"""
+    try:
+        # 대화 기록 로드
+        conversation_history = await _load_conversation(session_id)
+        if not conversation_history:
+            logger.info("No conversation history found, starting fresh")
+            return None
+        
+        # 대화 기록에서 선호도 관련 질문/답변 분석
+        completed_steps = _analyze_conversation_for_preference_steps(conversation_history)
+        
+        if not completed_steps:
+            logger.info("No preference steps found in conversation, starting fresh")
+            return None
+        
+        # 마지막 완료된 단계의 다음 단계 결정
+        last_completed = completed_steps[-1]
+        next_step = PREFERENCE_STEPS.get(last_completed, {}).get("next")
+        
+        if next_step:
+            logger.info(f"Recovered preference progress: {last_completed} -> {next_step}")
+            # Redis에 복구된 단계 저장
+            await _set_current_preference_step(session_id, next_step)
+            return next_step
+        else:
+            # 모든 단계 완료
+            logger.info("All preference steps completed based on conversation history")
+            return None
+        
+    except Exception as e:
+        logger.error(f"Failed to recover preference step from DB: {e}")
+        return None
+
+def _analyze_conversation_for_preference_steps(conversation_history: List[ChatMessage]) -> List[str]:
+    """대화 기록에서 완료된 선호도 단계들 분석"""
+    completed_steps = []
+    
+    # 각 단계별 질문과 답변 패턴 매칭
+    step_patterns = {
+        "experience_check": {
+            "question": "방탈출은 해보신 적 있나요?",
+            "answers": ["네, 해봤어요!", "아니요, 처음이에요."]
+        },
+        "experience_count": {
+            "question": "몇 번 정도 해보셨나요?",
+            "answers": ["1-10회", "11-30회", "31-50회", "51-80회", "81-100회", "100회 이상"]
+        },
+        "difficulty_check": {
+            "question": "어떤 난이도를 선호하시나요?",
+            "answers": ["🔒", "🔒🔒", "🔒🔒🔒"]
+        },
+        "activity_level_check": {
+            "question": "활동성 수준은 어떻게 하시나요?",
+            "answers": ["거의 없음", "보통", "많음"]
+        },
+        "group_size_check": {
+            "question": "몇 명이서 가시나요?",
+            "answers": ["2명", "3명", "4명", "5명 이상"]
+        },
+        "region_check": {
+            "question": "어느 지역을 선호하시나요?",
+            "answers": ["강남", "홍대", "건대", "신촌", "기타"]
+        },
+        "themes_check": {
+            "question": "어떤 테마를 선호하시나요?",
+            "answers": ["추리", "공포", "판타지", "SF", "스릴러", "모험"]
+        }
+    }
+    
+    # 대화 기록을 순회하며 질문-답변 쌍 찾기
+    for i in range(len(conversation_history) - 1):
+        assistant_msg = conversation_history[i]
+        user_msg = conversation_history[i + 1]
+        
+        if assistant_msg.role == "assistant" and user_msg.role == "user":
+            assistant_content = assistant_msg.content
+            user_content = user_msg.content
+            
+            # 각 단계별로 질문과 답변 매칭 확인
+            for step, pattern in step_patterns.items():
+                if step in completed_steps:
+                    continue
+                    
+                # 질문 패턴 매칭
+                question_match = any(
+                    pattern["question"] in assistant_content or 
+                    q in assistant_content for q in [pattern["question"]]
+                )
+                
+                # 답변 패턴 매칭
+                answer_match = any(
+                    answer in user_content for answer in pattern["answers"]
+                )
+                
+                if question_match and answer_match:
+                    completed_steps.append(step)
+                    logger.info(f"Found completed step: {step} (Q: {assistant_content[:50]}... A: {user_content})")
+                    break
+    
+    return completed_steps
         
 async def _get_next_preference_question(
     user_id: int, 
@@ -279,62 +358,85 @@ async def _get_next_preference_question(
     current_step: str | None, 
     user_prefs: Dict
 ) -> ChatResponse:
-    """다음 선호도 질문 반환"""
+    """다음 선호도 질문 반환 (복구 로직 포함)"""
+    
+    # Redis에서 진행 단계가 없으면 DB에서 복구 시도
+    if not current_step:
+        current_step = await _recover_preference_step_from_db(session_id)
     
     # 첫 번째 질문인 경우
     if not current_step:
-        next_step = "experience_check"
-        await _set_current_preference_step(session_id, next_step)
-        
-        # AI 질문을 대화 기록에 추가
-        ai_message = ChatMessage(
-            role="assistant",
-            content=_get_greeting_message()
-        )
-        conversation_history = [ai_message]
-        await _save_conversation(session_id, conversation_history)
-        
-        return ChatResponse(
-            message=_get_greeting_message(),
-            session_id=session_id,
-            questionnaire={
-                "type": next_step,
-                "question": PREFERENCE_STEPS[next_step]["question"],
-                "options": PREFERENCE_STEPS[next_step]["options"],
-                "next_step": PREFERENCE_STEPS[next_step]["next"]
-            },
-            chat_type="preference_start",
-            is_questionnaire_active=True
-        )
+        return await _handle_first_preference_question(session_id)
         
     # 다음 단계로 진행
     next_step = PREFERENCE_STEPS.get(current_step, {}).get("next")
     if next_step:
-        await _set_current_preference_step(session_id, next_step)
-        
-        # AI 질문을 대화 기록에 추가
-        ai_message = ChatMessage(
-            role="assistant",
-            content="좋습니다! 다음 질문입니다."
-        )
-        conversation_history = [ai_message]
-        await _save_conversation(session_id, conversation_history)
-        
-        return ChatResponse(
-            message="좋습니다! 다음 질문입니다.",
-            session_id=session_id,
-            questionnaire={
-                "type": next_step,
-                "question": PREFERENCE_STEPS[next_step]["question"],
-                "options": PREFERENCE_STEPS[next_step]["options"],
-                "next_step": PREFERENCE_STEPS[next_step].get("next")
-            },
-            chat_type="preference_question",
-            is_questionnaire_active=True
-        )
+        return await _handle_next_preference_question(session_id, current_step, next_step)
         
     # 모든 질문 완료
     return await _complete_preferences(user_id, session_id, user_prefs)
+
+async def _handle_first_preference_question(session_id: str) -> ChatResponse:
+    """첫 번째 선호도 질문 처리"""
+    next_step = "experience_check"
+    await _set_current_preference_step(session_id, next_step)
+    
+    # AI 질문을 대화 기록에 추가
+    ai_message = ChatMessage(
+        role="assistant",
+        content=_get_greeting_message()
+    )
+    conversation_history = [ai_message]
+    await _save_conversation(session_id, conversation_history)
+    
+    return ChatResponse(
+        message=_get_greeting_message(),
+        session_id=session_id,
+        questionnaire={
+            "type": next_step,
+            "question": PREFERENCE_STEPS[next_step]["question"],
+            "options": PREFERENCE_STEPS[next_step]["options"],
+            "next_step": PREFERENCE_STEPS[next_step]["next"]
+        },
+        chat_type="preference_start",
+        is_questionnaire_active=True
+    )
+
+async def _handle_next_preference_question(session_id: str, current_step: str, next_step: str) -> ChatResponse:
+    """다음 선호도 질문 처리"""
+    await _set_current_preference_step(session_id, next_step)
+    
+    # 복구된 경우와 새로 진행하는 경우 메시지 구분
+    message = _get_next_question_message(current_step)
+    
+    # AI 질문을 대화 기록에 추가
+    ai_message = ChatMessage(
+        role="assistant",
+        content=message
+    )
+    conversation_history = [ai_message]
+    await _save_conversation(session_id, conversation_history)
+    
+    return ChatResponse(
+        message=message,
+        session_id=session_id,
+        questionnaire={
+            "type": next_step,
+            "question": PREFERENCE_STEPS[next_step]["question"],
+            "options": PREFERENCE_STEPS[next_step]["options"],
+            "next_step": PREFERENCE_STEPS[next_step].get("next")
+        },
+        chat_type="preference_question",
+        is_questionnaire_active=True
+    )
+
+def _get_next_question_message(current_step: str) -> str:
+    """다음 질문 메시지 생성"""
+    if current_step in ["experience_check", "experience_count", "difficulty_check", 
+                       "activity_level_check", "group_size_check", "region_check"]:
+        return "좋습니다! 다음 질문입니다."
+    else:
+        return "이어서 다음 질문을 드릴게요."
 
 async def _process_preference_answer(
     user_id: int, 
@@ -344,139 +446,174 @@ async def _process_preference_answer(
     user_answer: str, 
     user_prefs: Dict
 ) -> ChatResponse:
-    """사용자 답변 처리 및 다음 단계 결정"""
-    user_message = ChatMessage(
-        role="user",
-        content=user_answer
-    )
-    conversation_history.append(user_message)
-    
-    # 답변을 선호도에 저장
-    await _save_preference_answer(user_id, current_step, user_answer, user_prefs)
-    
-    # 대화 기록 저장
-    await _save_conversation(session_id, conversation_history)
-    
-    # 다음 단계 결정
-    next_step = PREFERENCE_STEPS.get(current_step, {}).get("next")
-    
-    if next_step:
-        # 다음 질문으로 진행
-        await _set_current_preference_step(session_id, next_step)
-        return await _get_next_preference_question(user_id, session_id, next_step, user_prefs)
-    else:
-        # 모든 질문 완료
-        return await _complete_preferences(user_id, session_id, user_prefs)
+    """사용자 답변 처리 및 다음 단계 결정 (예외 처리 강화)"""
+    try:
+        user_message = ChatMessage(
+            role="user",
+            content=user_answer
+        )
+        conversation_history.append(user_message)
+        
+        # 답변을 선호도에 저장 (예외 처리 포함)
+        await _save_preference_answer(user_id, current_step, user_answer, user_prefs)
+        
+        # 대화 기록 저장
+        await _save_conversation(session_id, conversation_history)
+        
+        # 다음 단계 결정
+        next_step = PREFERENCE_STEPS.get(current_step, {}).get("next")
+        
+        if next_step:
+            # 다음 질문으로 진행
+            await _set_current_preference_step(session_id, next_step)
+            return await _get_next_preference_question(user_id, session_id, next_step, user_prefs)
+        else:
+            # 모든 질문 완료
+            return await _complete_preferences(user_id, session_id, user_prefs)
+            
+    except CustomError as e:
+        # 선호도 저장 실패 시 사용자에게 재시도 요청
+        logger.error(f"Preference processing failed: {e.message}")
+        return ChatResponse(
+        message=f"죄송합니다. 답변 저장에 실패했습니다. 다시 시도해주세요.\n\n{user_answer}",
+            session_id=session_id,
+            questionnaire={
+            "type": current_step,
+            "question": PREFERENCE_STEPS[current_step]["question"],
+            "options": PREFERENCE_STEPS[current_step]["options"],
+            "next_step": PREFERENCE_STEPS[current_step].get("next")
+        },
+        chat_type="preference_retry",
+            is_questionnaire_active=True
+        )
+    except Exception as e:
+        # 기타 예외 발생 시
+        logger.error(f"Unexpected error in preference processing: {e}")
+        return ChatResponse(
+            message="죄송합니다. 시스템 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            session_id=session_id,
+            questionnaire=None,
+            chat_type="error",
+            is_questionnaire_active=False
+        )
 
 async def _complete_preferences(user_id: int, session_id: str, user_prefs: Dict) -> ChatResponse:
-    """선호도 파악 완료 및 일반 대화 시작"""
-    # Redis에서 진행 단계 제거
-    await redis_manager.delete(f"preference_step:{session_id}")
-    
-    # 완료 메시지
-    completion_message = (
-        "모든 선호도 파악이 완료되었습니다!\n\n"
-        "이제 당신에게 딱 맞는 방탈출을 추천해드릴게요!\n"
-        "어떤 방탈출을 찾고 계신가요?\n\n"
-        "예시:\n"
-        "- '강남에서 3인 방탈출 추천해줘'\n"
-        "- '추리 테마로 활동성 높은 방탈출 추천해줘'\n"
-        "- '난이도 높은 방탈출 추천해줘'"
-    )
-    
-    return ChatResponse(
-        message=completion_message,
-        session_id=session_id,
-        questionnaire=None,
-        chat_type="preference_complete",
-        is_questionnaire_active=False
-    )
-
+    """선호도 파악 완료 및 일반 대화 시작 (예외 처리 포함)"""
+    try:
+        # Redis에서 진행 단계 제거
+        await redis_manager.delete(f"preference_step:{session_id}")
+        logger.info(f"Preference flow completed for user {user_id}, session {session_id}")
+        
+        # 완료 메시지
+        completion_message = (
+            "🎉 **모든 선호도 파악이 완료되었습니다!**\n\n"
+            "이제 당신에게 딱 맞는 방탈출을 추천해드릴게요!\n"
+            "어떤 방탈출을 찾고 계신가요?\n\n"
+            "**예시:**\n"
+            "- '강남에서 3인 방탈출 추천해줘'\n"
+            "- '추리 테마로 활동성 높은 방탈출 추천해줘'\n"
+            "- '난이도 높은 방탈출 추천해줘'"
+        )
+        
+        # 완료 메시지를 대화 기록에 추가
+        ai_message = ChatMessage(
+            role="assistant",
+            content=completion_message
+        )
+        await _save_conversation(session_id, [ai_message])
+        
+        return ChatResponse(
+            message=completion_message,
+            session_id=session_id,
+            questionnaire=None,
+            chat_type="preference_complete",
+            is_questionnaire_active=False
+        )
+        
+    except Exception as e:
+        logger.error(f"Error completing preferences: {e}")
+        # 완료 처리 실패해도 사용자에게는 성공 메시지 표시
+        return ChatResponse(
+            message="선호도 파악이 완료되었습니다! 이제 방탈출을 추천해드릴게요.",
+            session_id=session_id,
+            questionnaire=None,
+            chat_type="preference_complete",
+            is_questionnaire_active=False
+        )
+        
 async def _set_current_preference_step(session_id: str, step: str):
     """현재 선호도 파악 단계를 Redis에 저장"""
-    await redis_manager.set(
-        key=f"preference_step:{session_id}",
-        value=step,
-        ex=3600  # 1시간 TTL
-    )
+    try:
+        await redis_manager.set(
+            key=f"preference_step:{session_id}",
+            value=step,
+            ex=86400  # 24시간 TTL (더 긴 시간)
+        )
+        logger.info(f"Preference step saved: {step}")
+    except Exception as e:
+        logger.error(f"Failed to save preference step: {e}")
+        # Redis 실패해도 계속 진행 (DB에서 복구 가능)
 
 def _get_greeting_message() -> str:
     """사용자 인사 메시지 생성"""
     return (
         f"안녕하세요! 🎉 **AI 방탈출 월드**에 오신 것을 환영합니다!\n\n"
         "저는 당신에게 딱 맞는 방탈출을 추천해드리는 AI입니다!\n\n"
-                    "**방탈출은 해보신 적 있나요?**\n"
-                    "경험에 따라 맞춤형 추천을 해드릴게요! 😊"
-                )
+        "**방탈출은 해보신 적 있나요?**\n"
+        "경험에 따라 맞춤형 추천을 해드릴게요! 😊"
+    )
                 
 async def _save_preference_answer(user_id: int, step: str, answer: str, user_prefs: Dict):
-    """사용자 답변을 선호도에 저장"""
-    step_info = PREFERENCE_STEPS.get(step, {})
-    field = step_info.get("field")
-    
-    if not field:
-        return
-    
-    # 답변을 적절한 값으로 변환
-    if step == "experience_check":
-        if "해봤" in answer or "네" in answer:
-            user_prefs[field] = "방소년"  # 기본값
-        else:
-            user_prefs[field] = "방생아"
-            
-    elif step == "experience_count":
-        # 경험 횟수 범위를 숫자로 변환하고 경험 등급도 함께 설정
-        if "1-10" in answer:
-            user_prefs[field] = 5
-            user_prefs['experience_level'] = "방린이"
-        elif "11-30" in answer:
-            user_prefs[field] = 20
-            user_prefs['experience_level'] = "방소년"
-        elif "31-50" in answer:
-            user_prefs[field] = 40
-            user_prefs['experience_level'] = "방어른"
-        elif "51-80" in answer:
-            user_prefs[field] = 65
-            user_prefs['experience_level'] = "방신"
-        elif "81-100" in answer:
-            user_prefs[field] = 90
-            user_prefs['experience_level'] = "방장로"
-        elif "100회 이상" in answer:
-            user_prefs[field] = 120
-            user_prefs['experience_level'] = "방장로"
-        else:
-            user_prefs[field] = 1
-            user_prefs['experience_level'] = "방생아"
-            
-    elif step == "difficulty_check":
-        # 이모지 개수로 난이도 결정
-        difficulty = answer.count("🔒")
-        user_prefs[field] = difficulty
+    """사용자 답변을 선호도에 저장 (LLM 기반 자연어 처리)"""
+    try:
+        step_info = PREFERENCE_STEPS.get(step, {})
+        field = step_info.get("field")
         
-    elif step == "activity_level_check":
-        if answer == "거의 없음":
-            user_prefs[field] = 1
-        elif answer == "보통":
-            user_prefs[field] = 2
-        elif answer == "많음":
-            user_prefs[field] = 3
-            
-    elif step == "group_size_check":
-        # "2명", "3명", "4명"에서 숫자 추출
-        numbers = re.findall(r'\d+', answer)
-        if numbers:
-            user_prefs[field] = int(numbers[0])
-            
-    elif step == "region_check":
-        # 선택된 지역을 리스트로 저장
-        user_prefs[field] = [answer]
+        if not field:
+            logger.warning(f"Unknown step: {step}")
+            return
         
-    elif step == "themes_check":
-        # 선택된 테마를 리스트로 저장
-        user_prefs[field] = [answer]
-    
-    # 선호도 업데이트
-    await upsert_user_preferences(user_id, user_prefs)
+        # LLM 기반 답변 분석 및 저장
+        if step == "experience_check":
+            analyzed_answer = await analyze_experience_answer(answer)
+            if analyzed_answer == "experienced":
+                user_prefs[field] = "방소년"  # 기본값
+            else:
+                user_prefs[field] = "방생아"
+                
+        elif step == "experience_count":
+            analyzed_count = await analyze_experience_count(answer)
+            user_prefs[field] = analyzed_count["count"]
+            user_prefs['experience_level'] = analyzed_count["level"]
+            
+        elif step == "difficulty_check":
+            difficulty = await analyze_difficulty_answer(answer)
+            user_prefs[field] = difficulty
+            
+        elif step == "activity_level_check":
+            activity_level = await analyze_activity_answer(answer)
+            user_prefs[field] = activity_level
+            
+        elif step == "group_size_check":
+            group_size = await analyze_group_size_answer(answer)
+            user_prefs[field] = group_size
+            
+        elif step == "region_check":
+            region = await analyze_region_answer(answer)
+            user_prefs[field] = [region]
+            
+        elif step == "themes_check":
+            theme = await analyze_theme_answer(answer)
+            user_prefs[field] = [theme]
+        
+        # 선호도 업데이트
+        await upsert_user_preferences(user_id, user_prefs)
+        logger.info(f"Preference saved successfully: {step} = {user_prefs.get(field)}")
+            
+    except Exception as e:
+        logger.error(f"Failed to save preference answer: {e}", step=step, answer=answer)
+        # DB 저장 실패 시에도 진행 단계는 유지 (재시도 가능)
+        raise CustomError("PREFERENCE_SAVE_FAILED", f"선호도 저장에 실패했습니다: {str(e)}")
 
 async def get_or_create_user_session(user_id: int, session_id: str | None = None) -> Dict[str, Any] | None:
     """사용자별 세션 확인 및 생성 (하나만 허용)"""
@@ -501,7 +638,7 @@ async def get_or_create_user_session(user_id: int, session_id: str | None = None
     session_data = {
         "session_id": new_session_id,
         "user_id": user_id,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": now_korea_iso()
     }
     
     await redis_manager.set(
@@ -521,9 +658,9 @@ async def handle_general_chat(
     user_prefs: Dict, 
 ) -> ChatResponse:
     """방탈출 추천을 위한 일반 챗봇 대화 처리"""
-    # 사용자 메시지 추가
+        # 사용자 메시지 추가
     user_message_obj = ChatMessage(
-        role="user",
+            role="user",
         content=user_message
     )
     conversation_history.append(user_message_obj)
@@ -644,19 +781,19 @@ async def _handle_general_response(
         chat_type = "general"
         
         # AI 응답 추가
-    ai_message = ChatMessage(role="assistant", content=response_text)
-    conversation_history.append(ai_message)
-    await _save_conversation(session_id, conversation_history)
-    
-    return ChatResponse(
-        message=response_text,
-        session_id=session_id,
-        questionnaire=None,
-        recommendations=None,
-        user_profile=await extract_user_profile(conversation_history, user_prefs),
-        chat_type=chat_type,
-        is_questionnaire_active=False
-    )
+        ai_message = ChatMessage(role="assistant", content=response_text)
+        conversation_history.append(ai_message)
+        await _save_conversation(session_id, conversation_history)
+        
+        return ChatResponse(
+            message=response_text,
+            session_id=session_id,
+            questionnaire=None,
+            recommendations=None,
+            user_profile=await extract_user_profile(conversation_history, user_prefs),
+            chat_type=chat_type,
+            is_questionnaire_active=False
+        )
         
 async def _handle_unclear_intent(session_id: str, user_message: str) -> ChatResponse:
     """의도 파악 실패 시 처리"""
@@ -724,6 +861,8 @@ async def extract_user_profile(conversation_history: List[ChatMessage], user_pre
         profile["preferred_group_size"] = group_size
     
     return profile
+        
+
 
 def parse_group_size(message: str) -> int | str | None:
     """유연한 인원수 파싱"""
