@@ -5,7 +5,7 @@ from ..core.exceptions import CustomError
 from ..models.user import User, UserCreate, UserLogin, Token
 from ..services.user_service import create_user, authenticate_user, get_current_user_from_token
 
-router = APIRouter(prefix="/auth", tags=["authentication"])
+router = APIRouter(prefix="/auth", tags=["Auth"])
 security = HTTPBearer()
 
 

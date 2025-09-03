@@ -6,7 +6,7 @@ from ..services.chat_service import (
 )
 from ..api.auth import get_current_user
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
 @router.post("/", response_model=ChatResponse)
