@@ -7,7 +7,9 @@ from typing import Dict, Any, List
 from ..core.logger import logger
 from ..repositories.escape_room_repository import get_intent_patterns_from_db
 from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage
 from ..core.config import settings
+from ..core.llm import llm
 
 # 프롬프트/스키마 버전 관리
 from ..core.config import settings
@@ -146,8 +148,6 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
     """LLM을 사용한 의도 분석"""
     try:
         # LLM 서비스의 기존 LLM 인스턴스 사용
-        from .chat_service import llm_service
-        llm = llm_service.llm
         
         prompt = _build_prompt_by_version(
             CURRENT_PROMPT_VERSION, 
@@ -155,8 +155,7 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
         )
         
         # LangChain 방식으로 호출
-        from langchain.schema import HumanMessage
-        response = await llm.agenerate([[HumanMessage(content=prompt)]])
+        response = await llm.llm.agenerate([[HumanMessage(content=prompt)]])
         
         # 응답 추출
         response_text = response.generations[0][0].text.strip()
@@ -309,8 +308,7 @@ async def analyze_experience_answer(user_answer: str) -> str:
 
 async def analyze_experience_count(user_answer: str) -> Dict[str, Any]:
     """실무 최적화: 숫자 추출 우선, LLM 최소 사용"""
-    # 1단계: 숫자 직접 추출 (90% 케이스)
-    import re
+    # 1단계: 숫자 직접 추출 
     numbers = re.findall(r'\d+', user_answer)
     
     if numbers:
@@ -432,7 +430,6 @@ async def analyze_activity_answer(user_answer: str) -> int:
 async def analyze_group_size_answer(user_answer: str) -> int:
     """실무 최적화: 숫자 추출 우선, LLM 최소 사용"""
     # 1단계: 숫자 직접 추출 (95% 케이스)
-    import re
     numbers = re.findall(r'\d+', user_answer)
     
     if numbers:

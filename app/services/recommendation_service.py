@@ -6,6 +6,7 @@ from ..core.logger import logger
 from ..core.redis_manager import redis_manager
 from .nlp_service import analyze_intent
 from ..repositories.escape_room_repository import get_embedding_based_recommendations
+from ..core.llm import llm
 
 async def get_escape_room_recommendations(
     user_message: str, 
@@ -29,8 +30,7 @@ async def get_escape_room_recommendations(
         intent_analysis = await analyze_intent(user_message)
 
         # 사용자 메시지를 임베딩
-        from .chat_service import llm_service
-        query_embedding = await llm_service.create_embedding(user_message)
+        query_embedding = await llm.create_embedding(user_message)
         
         # 개인화된 추천 조회
         rows = await get_personalized_recommendations(

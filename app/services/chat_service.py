@@ -35,6 +35,7 @@ from .nlp_service import (
     analyze_region_answer,
     analyze_theme_answer
 )
+from .recommendation_service import get_escape_room_recommendations
 
 # LLM 관련만 클래스로 유지 (상태 관리 필요)
 class LLMService:
@@ -712,7 +713,7 @@ async def handle_general_chat(
     user_prefs: Dict, 
 ) -> ChatResponse:
     """방탈출 추천을 위한 일반 챗봇 대화 처리"""
-        # 사용자 메시지 추가
+    # 사용자 메시지 추가
     user_message_obj = ChatMessage(
             role="user",
         content=user_message
@@ -767,7 +768,6 @@ async def _handle_recommendation_request(
     entities = user_intent.get("entities", {})
     
     # 실제 방탈출 추천 조회
-    from ..services.recommendation_service import get_escape_room_recommendations
     recommendations = await get_escape_room_recommendations(user_message, user_prefs)
     
     # 추천 결과를 포함한 응답 생성
