@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 from ..core.logger import logger
 from ..core.connections import redis_manager
 from ..core.constants import PREFERENCE_STEPS
+from fastapi import HTTPException
 
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
@@ -23,7 +24,7 @@ from ..repositories.chat_repository import (
     update_session,
     get_session_by_id,
 )
-from ..repositories.user_repository import upsert_user_preferences
+from ..repositories.user_repository import upsert_user_preferences, get_user_preferences
 from .nlp_service import (
     analyze_intent,
     analyze_experience_answer,
@@ -177,19 +178,72 @@ def _parse_messages(data: Any) -> List[ChatMessage]:
 
 
 
-async def chat_with_user(session_id: str, user_prefs: Dict, user_message: str, user_id: int) -> ChatResponse:    
-    """통합 채팅 처리 - 선호도 파악 + 방탈출 추천"""
-    # 대화 기록 로드
-    conversation_history = await _load_conversation(session_id)
-    
-    # 1. 선호도 파악이 필요한 경우
-    if not user_prefs or not _is_preferences_complete(user_prefs):
-        return await handle_preference_flow(
-            user_id, session_id, conversation_history, user_prefs, user_message
+async def chat_with_user(
+    user_id: int,
+    message: str,
+    session_id: str | None = None
+) -> ChatResponse:
+    """통합 채팅 처리 - 선호도 파악 + 방탈출 추천 (Service 계층에서 예외 처리)"""
+    try:
+        # 입력 검증
+        if not message or not message.strip():
+            raise CustomError("VALIDATION_ERROR", "메시지를 입력해주세요.")
+        
+        if len(message) > 500:
+            raise CustomError("VALIDATION_ERROR", "메시지가 너무 깁니다. (최대 500자)")
+        
+        # XSS 방지: 기본적인 HTML 태그 제거
+        sanitized_message = re.sub(r'<[^>]+>', '', message.strip())
+        
+        # Rate Limiting 체크
+        is_allowed, status = await redis_manager.rate_limit_check(user_id, limit=20, window=60)
+        if not is_allowed:
+            raise CustomError("RATE_LIMIT_EXCEEDED", f"요청 한도를 초과했습니다. {status.get('reset_time', 60)}초 후 다시 시도해주세요.")
+        
+        # 로깅
+        logger.user_action(str(user_id), "chat_request", f"Chat request: {sanitized_message[:50]}...")
+        
+        # 사용자 챗 세션 확인 및 생성 
+        session_info = await get_or_create_user_session(user_id, session_id)
+        if not session_info:
+            raise CustomError("SESSION_CREATION_FAILED", "채팅 세션 생성에 실패했습니다.")
+
+        # 유저 기본 선호도 조회
+        user_prefs = await get_user_preferences(user_id)
+
+        # 대화 기록 로드
+        conversation_history = await _load_conversation(session_info["session_id"])
+        
+        # 1. 선호도 파악이 필요한 경우
+        if not user_prefs or not _is_preferences_complete(user_prefs):
+            response = await handle_preference_flow(
+                user_id, session_info["session_id"], conversation_history, user_prefs, sanitized_message
+            )
+        else:
+            # 2. 선호도가 완성된 경우 - 방탈출 추천 대화
+            response = await handle_general_chat(user_id, session_info["session_id"], conversation_history, sanitized_message, user_prefs)
+        
+        # 응답에 세션 ID 추가
+        if response:
+            response.session_id = session_info["session_id"]
+        
+        # 로깅
+        logger.user_action(
+            str(user_id), "chat_response", "Chat response generated", 
+            session_id=session_info["session_id"],
+            chat_type=getattr(response, 'chat_type', 'unknown'),
+            is_questionnaire_active=getattr(response, 'is_questionnaire_active', False)
         )
-    
-    # 2. 선호도가 완성된 경우 - 방탈출 추천 대화
-    return await handle_general_chat(user_id, session_id, conversation_history, user_message, user_prefs)
+        
+        return response
+        
+    except (CustomError, HTTPException):
+        # CustomError와 HTTPException은 그대로 전파 (Global Exception Handler에서 처리)
+        raise
+    except Exception as e:
+        # 예상치 못한 에러는 CustomError로 변환
+        logger.error(f"Unexpected error in chat_with_user: {e}", user_id=user_id, error_type="unexpected_error")
+        raise CustomError("CHATBOT_ERROR", "챗봇 처리 중 오류가 발생했습니다.")
 
 def _is_preferences_complete(user_prefs: Dict) -> bool:
     """사용자 선호도가 완성되었는지 확인"""

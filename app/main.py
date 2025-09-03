@@ -2,10 +2,11 @@ import time
 import uuid
 from datetime import datetime
 from .utils.time import now_korea_iso
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .core.logger import logger, get_trace_logger
+from .core.exceptions import CustomError
 
 from .core.config import settings
 from .core.connections import connections
@@ -138,12 +139,48 @@ async def shutdown_event():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """전역 예외 처리"""
-    logger.error(f"Global exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "내부 서버 오류가 발생했습니다."}
-    )
+    """전역 예외 처리 - HTTPException, CustomError, 일반 Exception 모두 처리"""
+    if isinstance(exc, HTTPException):
+        # HTTPException 처리 (FastAPI 기본 예외)
+        logger.error(
+            f"HTTPException: {exc.detail}", 
+            status_code=exc.status_code,
+            path=request.url.path,
+            method=request.method
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=exc.detail
+        )
+    elif isinstance(exc, CustomError):
+        # CustomError 처리 (애플리케이션 커스텀 예외)
+        logger.error(
+            f"CustomError: {exc.message}", 
+            error_code=exc.error_code, 
+            http_status=exc.http_status,
+            path=request.url.path,
+            method=request.method
+        )
+        return JSONResponse(
+            status_code=exc.http_status,
+            content=exc.to_dict()
+        )
+    else:
+        # 일반 Exception 처리 (예상치 못한 에러)
+        logger.error(
+            f"Unexpected error: {exc}", 
+            error_type=type(exc).__name__,
+            path=request.url.path,
+            method=request.method
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "fail",
+                "error_code": "200001",
+                "message": "관리자에게 문의해주세요."
+            }
+        )
 
 
 @app.get("/")

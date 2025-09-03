@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 범용 모니터링 시스템 (MVP → 운영 확장 가능)
 - API 호출 추적 (OpenAI, 기타 외부 API)
