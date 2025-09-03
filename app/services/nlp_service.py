@@ -400,7 +400,7 @@ async def analyze_group_size_answer(user_answer: str) -> int:
     # 1단계: 숫자 직접 추출 (95% 케이스)
     numbers = re.findall(r'\d+', user_answer)
     
-        if numbers:
+    if numbers:
         size = int(numbers[0])
         if 2 <= size <= 10:  # 합리적인 범위
             return size
