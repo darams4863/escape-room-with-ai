@@ -138,5 +138,6 @@ async def health_check():
             "status": "unhealthy",
             "service": settings.app_name,
             "version": settings.app_version,
+            "timestamp": now_korea_iso(),
             "error": str(e)
         }
