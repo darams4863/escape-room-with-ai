@@ -11,10 +11,6 @@ from ..core.connections import redis_manager
 from ..core.constants import PREFERENCE_STEPS
 from fastapi import HTTPException
 
-from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAIEmbeddings
-
 from ..core.config import settings
 from ..core.exceptions import CustomError
 from ..models.escape_room import ChatResponse, ChatMessage
@@ -37,91 +33,10 @@ from .nlp_service import (
 )
 from .recommendation_service import get_escape_room_recommendations
 
-# LLM 관련만 클래스로 유지 (상태 관리 필요)
-class LLMService:
-    """LLM 및 임베딩 서비스 (상태 유지 필요)"""
-    
-    def __init__(self):
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0.7,
-            openai_api_key=settings.openai_api_key
-        )
-        self.embeddings = OpenAIEmbeddings(openai_api_key=settings.openai_api_key)
-        
-        # 경험 등급별 프롬프트 템플릿
-        self.chat_prompt = PromptTemplate(
-            input_variables=["conversation_history", "user_message", "user_level", "user_preferences"],
-            template="""
-당신은 방탈출 전문가입니다. 사용자의 경험 등급과 선호사항을 고려하여 맞춤형 추천을 해주세요.
+# LLM 서비스는 core/llm.py에서 import
+from ..core.llm import llm
 
-사용자 정보:
-- 경험 등급: {user_level}
-- 선호사항: {user_preferences}
-
-대화 기록:
-{conversation_history}
-
-사용자 메시지: {user_message}
-
-다음 단계를 따라 응답해주세요:
-
-1. 사용자의 메시지를 이해하고 공감해주세요
-2. 경험 등급에 맞는 톤으로 응답하세요:
-   - 방생아/방린이: 친절한 가이드 톤
-   - 방소년/방어른: 동료 게이머 톤  
-   - 방신/방장로: 존중 + 도전 욕구 자극
-3. 선호사항을 파악하고 반영하세요 (난이도, 활동성, 지역, 연령대, 그룹 크기 등)
-4. 적절한 방탈출을 추천해주세요
-5. 경험 등급에 맞는 조언을 포함하세요
-
-응답 형식:
-- 메시지: 사용자와의 자연스러운 대화
-- 추천 방탈출: 2-3개 추천 (있다면)
-- 사용자 프로필: 파악된 정보 요약
-
-응답해주세요:
-"""
-        )
-        
-        # LLMChain 대신 최신 방식 사용
-        self.chain = self.chat_prompt | self.llm
-    
-    async def generate_response(self, conversation_history: List[ChatMessage], user_level: str, user_prefs: Dict) -> str:
-        """LLM을 사용하여 경험 등급별 맞춤 응답 생성"""
-        try:
-            # 대화 기록을 문자열로 변환
-            history_text = "\n".join([
-                f"{msg.role}: {msg.content}" for msg in conversation_history[-6:]
-            ])
-            
-            # 사용자 선호사항 요약
-            prefs_summary = _format_user_preferences(user_prefs)
-            
-            # 랭체인 실행 (최신 방식)
-            response = await self.chain.ainvoke({
-                "conversation_history": history_text,
-                "user_message": conversation_history[-1].content,
-                "user_level": user_level,
-                "user_preferences": prefs_summary
-            })
-            
-            return response.content.strip()
-            
-        except Exception as e:
-            logger.error(f"Response generation error: {e}")
-            raise CustomError("OPENAI_ERROR")
-    
-    async def create_embedding(self, text: str) -> List[float]:
-        """텍스트를 임베딩 벡터로 변환"""
-        try:
-            return await self.embeddings.aembed_query(text)
-        except Exception as e:
-            logger.error(f"Embedding creation error: {e}")
-            raise CustomError("EMBEDDING_ERROR")
-
-# LLM 서비스 인스턴스
-llm_service = LLMService()
+# 중복된 LLMService 클래스 제거됨 - core/llm.py의 llm 인스턴스 사용
 
 # ===== 헬퍼 함수들 =====
 
@@ -530,15 +445,15 @@ async def _process_preference_answer(
         # 선호도 저장 실패 시 사용자에게 재시도 요청
         logger.error(f"Preference processing failed: {e.message}")
         return ChatResponse(
-        message=f"죄송합니다. 답변 저장에 실패했습니다. 다시 시도해주세요.\n\n{user_answer}",
+            message=f"죄송합니다. 답변 저장에 실패했습니다. 다시 시도해주세요.\n\n{user_answer}",
             session_id=session_id,
             questionnaire={
-            "type": current_step,
-            "question": PREFERENCE_STEPS[current_step]["question"],
-            "options": PREFERENCE_STEPS[current_step]["options"],
-            "next_step": PREFERENCE_STEPS[current_step].get("next")
-        },
-        chat_type="preference_retry",
+                "type": current_step,
+                "question": PREFERENCE_STEPS[current_step]["question"],
+                "options": PREFERENCE_STEPS[current_step]["options"],
+                "next_step": PREFERENCE_STEPS[current_step].get("next")
+            },
+            chat_type="preference_retry",
             is_questionnaire_active=True
         )
     except Exception as e:
@@ -697,7 +612,6 @@ async def get_or_create_user_session(user_id: int, session_id: str | None = None
     }
     
     await redis_manager.set(
-        
         key=existing_session_key,
         value=json.dumps(session_data, ensure_ascii=False),
         ex=86400  # 24시간 TTL
@@ -715,7 +629,7 @@ async def handle_general_chat(
     """방탈출 추천을 위한 일반 챗봇 대화 처리"""
     # 사용자 메시지 추가
     user_message_obj = ChatMessage(
-            role="user",
+        role="user",
         content=user_message
     )
     conversation_history.append(user_message_obj)
@@ -819,7 +733,7 @@ async def _handle_general_response(
     
     if intent == "question":
         # 질문인 경우 더 구체적인 답변
-        response_text = await llm_service.generate_response(
+        response_text = await llm.generate_response(
             conversation_history, 
             user_prefs.get('experience_level', '방생아'), 
             user_prefs
@@ -827,27 +741,27 @@ async def _handle_general_response(
         chat_type = "question"
     else:
         # 일반 대화 또는 의도 불명인 경우 친근한 응답
-        response_text = await llm_service.generate_response(
+        response_text = await llm.generate_response(
             conversation_history, 
             user_prefs.get('experience_level', '방생아'), 
             user_prefs
         )
         chat_type = "general"
-        
-        # AI 응답 추가
-        ai_message = ChatMessage(role="assistant", content=response_text)
-        conversation_history.append(ai_message)
-        await _save_conversation(session_id, conversation_history)
-        
-        return ChatResponse(
-            message=response_text,
-            session_id=session_id,
-            questionnaire=None,
-            recommendations=None,
-            user_profile=await extract_user_profile(conversation_history, user_prefs),
-            chat_type=chat_type,
-            is_questionnaire_active=False
-        )
+    
+    # AI 응답 추가
+    ai_message = ChatMessage(role="assistant", content=response_text)
+    conversation_history.append(ai_message)
+    await _save_conversation(session_id, conversation_history)
+    
+    return ChatResponse(
+        message=response_text,
+        session_id=session_id,
+        questionnaire=None,
+        recommendations=None,
+        user_profile=await extract_user_profile(conversation_history, user_prefs),
+        chat_type=chat_type,
+        is_questionnaire_active=False
+    )
         
 async def _handle_unclear_intent(session_id: str, user_message: str) -> ChatResponse:
     """의도 파악 실패 시 처리"""
