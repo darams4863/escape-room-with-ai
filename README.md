@@ -17,14 +17,25 @@ app/
 ├── api/           # FastAPI 엔드포인트
 │   ├── auth.py    # 인증 (회원가입, 로그인)
 │   └── chat.py    # 챗봇 대화
+├── core/          # 핵심 인프라 (공통 서비스)
+│   ├── config.py      # 설정 관리
+│   ├── connections.py  # DB/Redis 연결 관리
+│   ├── exceptions.py   # 커스텀 예외 정의
+│   ├── logger.py       # 중앙화된 로깅
+│   ├── llm.py          # LLM 서비스 (OpenAI)
+│   ├── postgres_manager.py  # PostgreSQL 관리
+│   └── redis_manager.py     # Redis 관리 (캐시, Rate Limiting)
 ├── services/      # 비즈니스 로직
 │   ├── chat_service.py      # 챗봇 핵심 로직
 │   ├── user_service.py      # 사용자 관리
 │   ├── nlp_service.py       # 의도 분석
 │   └── recommendation_service.py  # 추천 시스템
 ├── repositories/  # 데이터 접근
+│   ├── chat_repository.py      # 채팅 세션 관리
+│   ├── escape_room_repository.py  # 방탈출 데이터
+│   └── user_repository.py      # 사용자 데이터
 ├── models/        # Pydantic 모델
-└── utils/         # 유틸리티 (인증, 지역별(한국) 시간)
+└── utils/         # 유틸리티 (인증, 시간 관리)
 ```
 
 ## 🔄 핵심 플로우
@@ -44,9 +55,10 @@ app/
 
 - **Backend**: FastAPI, Python 3.13
 - **Database**: PostgreSQL + pgvector (벡터 검색)
-- **Cache**: Redis (세션 관리)
-- **AI**: OpenAI GPT, LangChain
+- **Cache**: Redis (세션 관리, Rate Limiting, 캐싱)
+- **AI**: OpenAI GPT-3.5-turbo, LangChain, OpenAI Embeddings
 - **Authentication**: JWT + bcrypt
+- **Architecture**: 계층형 아키텍처 (API → Service → Repository)
 
 ## 📋 API 엔드포인트
 
@@ -68,7 +80,9 @@ sequenceDiagram
     participant U as User Service
     participant Ch as Chat API
     participant CS as Chat Service
-    participant AI as OpenAI
+    participant LLM as Core LLM
+    participant NLP as NLP Service
+    participant R as Recommendation Service
 
     C->>A: POST /auth/login
     A->>U: authenticate_user()
@@ -79,11 +93,63 @@ sequenceDiagram
     Ch->>U: verify_token()
     U->>Ch: User Info
     Ch->>CS: chat_with_user()
-    CS->>AI: LLM Request
-    AI->>CS: AI Response
+    CS->>NLP: analyze_intent()
+    NLP->>LLM: LLM Request
+    LLM->>NLP: Intent Analysis
+    NLP->>CS: Intent Result
+    CS->>R: get_recommendations()
+    R->>LLM: create_embedding()
+    LLM->>R: Vector Embedding
+    R->>CS: Recommendations
     CS->>Ch: Chat Response
     Ch->>C: Final Response
 ```
+
+## 🧠 LLM 아키텍처
+
+### **Core 계층의 LLM 서비스**
+
+LLM 서비스는 `app/core/llm.py`에 위치하여 순환 참조를 방지하고 공통 기능을 제공합니다.
+
+#### **주요 특징**
+- **중앙화된 LLM 관리**: 모든 AI 기능을 하나의 서비스에서 관리
+- **순환 참조 해결**: Service 계층 간의 의존성 문제 해결
+- **Singleton 패턴**: 메모리 효율적인 LLM 인스턴스 관리
+- **임베딩 서비스**: 벡터 검색을 위한 텍스트 임베딩 생성
+
+#### **LLM 서비스 구조**
+```python
+# app/core/llm.py
+class LLM:
+    def __init__(self):
+        self.llm = ChatOpenAI(model="gpt-3.5-turbo")
+        self.embeddings = OpenAIEmbeddings()
+    
+    async def generate_response(self, ...) -> str:
+        # 챗봇 응답 생성
+    
+    async def create_embedding(self, text: str) -> list:
+        # 벡터 임베딩 생성
+```
+
+#### **사용 패턴**
+```python
+# Service 계층에서 사용
+from ..core.llm import llm
+
+# NLP 분석
+intent_result = await llm.analyze_intent(user_message)
+
+# 추천 시스템
+embedding = await llm.create_embedding(user_message)
+```
+
+### **LLM 활용 영역**
+
+1. **의도 분석** (`nlp_service.py`): 사용자 메시지의 의도 파악
+2. **선호도 분석**: 자연어 답변을 구조화된 데이터로 변환
+3. **응답 생성**: 사용자 맞춤형 챗봇 응답 생성
+4. **벡터 검색**: 방탈출 추천을 위한 임베딩 생성
 
 ## 🛡️ 예외 처리 구조
 
