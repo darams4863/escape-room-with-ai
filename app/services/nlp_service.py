@@ -6,17 +6,10 @@ from ..utils.time import now_korea_iso
 from typing import Dict, Any, List
 from ..core.logger import logger
 from ..repositories.escape_room_repository import get_intent_patterns_from_db
-from langchain_openai import ChatOpenAI
+from ..core.llm import llm
 from langchain.schema import HumanMessage
 from ..core.config import settings
-from ..core.llm import llm
 
-# 프롬프트/스키마 버전 관리
-from ..core.config import settings
-
-# 설정에서 프롬프트 버전 가져오기
-CURRENT_PROMPT_VERSION = settings.nlp_prompt_version
-CURRENT_SCHEMA_VERSION = settings.nlp_schema_version
 
 # 프롬프트 버전별 분기 함수
 def _build_prompt_v1_2(user_message: str) -> str:
@@ -150,7 +143,7 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
         # LLM 서비스의 기존 LLM 인스턴스 사용
         
         prompt = _build_prompt_by_version(
-            CURRENT_PROMPT_VERSION, 
+            settings.nlp_prompt_version, 
             user_message
         )
         
@@ -168,8 +161,8 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
             if "_meta" not in intent_data:
                 intent_data["_meta"] = {}
             
-            intent_data["_meta"].setdefault("prompt_version", CURRENT_PROMPT_VERSION)
-            intent_data["_meta"].setdefault("schema_version", CURRENT_SCHEMA_VERSION)
+            intent_data["_meta"].setdefault("prompt_version", settings.nlp_prompt_version)
+            intent_data["_meta"].setdefault("schema_version", settings.nlp_schema_version)
             intent_data["_meta"].setdefault("timestamp", now_korea_iso())
             
             return intent_data
@@ -241,28 +234,7 @@ async def _get_intent_patterns() -> Dict[str, List[Dict]]:
 # 선호도 답변 분석 함수들 (LLM 기반 자연어 처리)
 # =============================================================================
 
-class PreferenceAnalyzer:
-    """선호도 답변 분석을 위한 LLM 서비스 (싱글톤 패턴)"""
-    
-    _instance = None
-    _llm = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(PreferenceAnalyzer, cls).__new__(cls)
-        return cls._instance
-    
-    def __init__(self):
-        if self._llm is None:
-            self._llm = ChatOpenAI(
-                model="gpt-3.5-turbo",
-                temperature=0.3,  # 더 일관된 결과를 위해 낮은 temperature
-                openai_api_key=settings.openai_api_key
-            )
-    
-    @property
-    def llm(self):
-        return self._llm
+# PreferenceAnalyzer 클래스 제거됨 - core/llm.py의 llm 인스턴스 사용
 
 async def analyze_experience_answer(user_answer: str) -> str:
     """실무 최적화: 패턴 매칭 우선, LLM 최소 사용"""
@@ -290,14 +262,13 @@ async def analyze_experience_answer(user_answer: str) -> str:
     
     # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
-        analyzer = PreferenceAnalyzer()
         prompt = f"""
         방탈출 경험 질문 답변: "{user_answer}"
         
         experienced 또는 beginner 중 하나만 답변하세요.
         """
         
-        response = await analyzer.llm.ainvoke(prompt)
+        response = await llm.llm.ainvoke(prompt)
         result = response.content.strip().lower()
         
         return result if result in ["experienced", "beginner"] else "beginner"
@@ -335,14 +306,13 @@ async def analyze_experience_count(user_answer: str) -> Dict[str, Any]:
     
     # 3단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
-        analyzer = PreferenceAnalyzer()
         prompt = f"""
         경험 횟수 답변: "{user_answer}"
         
         1-10, 11-30, 31-50, 51-80, 81-100, 100+ 중 하나만 답변하세요.
         """
         
-        response = await analyzer.llm.ainvoke(prompt)
+        response = await llm.llm.ainvoke(prompt)
         result = response.content.strip()
         
         if result == "1-10":
@@ -382,14 +352,13 @@ async def analyze_difficulty_answer(user_answer: str) -> int:
     
     # 3단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
-        analyzer = PreferenceAnalyzer()
         prompt = f"""
         난이도 답변: "{user_answer}"
         
         1, 2, 3 중 하나만 답변하세요.
         """
         
-        response = await analyzer.llm.ainvoke(prompt)
+        response = await llm.llm.ainvoke(prompt)
         result = response.content.strip()
         
         return int(result) if result in ["1", "2", "3"] else 2
@@ -411,14 +380,13 @@ async def analyze_activity_answer(user_answer: str) -> int:
     
     # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
-        analyzer = PreferenceAnalyzer()
         prompt = f"""
         활동성 답변: "{user_answer}"
         
         1, 2, 3 중 하나만 답변하세요.
         """
         
-        response = await analyzer.llm.ainvoke(prompt)
+        response = await llm.llm.ainvoke(prompt)
         result = response.content.strip()
         
         return int(result) if result in ["1", "2", "3"] else 2
@@ -432,7 +400,7 @@ async def analyze_group_size_answer(user_answer: str) -> int:
     # 1단계: 숫자 직접 추출 (95% 케이스)
     numbers = re.findall(r'\d+', user_answer)
     
-    if numbers:
+        if numbers:
         size = int(numbers[0])
         if 2 <= size <= 10:  # 합리적인 범위
             return size
@@ -452,14 +420,13 @@ async def analyze_group_size_answer(user_answer: str) -> int:
     
     # 3단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
-        analyzer = PreferenceAnalyzer()
         prompt = f"""
         인원수 답변: "{user_answer}"
         
         숫자만 답변하세요 (예: 3).
         """
         
-        response = await analyzer.llm.ainvoke(prompt)
+        response = await llm.llm.ainvoke(prompt)
         result = response.content.strip()
         
         size = int(result) if result.isdigit() else 3
@@ -479,14 +446,13 @@ async def analyze_region_answer(user_answer: str) -> str:
     
     # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
-        analyzer = PreferenceAnalyzer()
         prompt = f"""
         지역 답변: "{user_answer}"
         
         강남, 홍대, 건대, 신촌, 강북, 잠실, 송파, 마포, 용산, 기타 중 하나만 답변하세요.
         """
         
-        response = await analyzer.llm.ainvoke(prompt)
+        response = await llm.llm.ainvoke(prompt)
         result = response.content.strip()
         
         return result if result in regions + ["기타"] else "강남"
@@ -505,14 +471,13 @@ async def analyze_theme_answer(user_answer: str) -> str:
     
     # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
-        analyzer = PreferenceAnalyzer()
         prompt = f"""
         테마 답변: "{user_answer}"
         
         추리, 공포, 판타지, SF, 스릴러, 모험, 로맨스, 코미디 중 하나만 답변하세요.
         """
         
-        response = await analyzer.llm.ainvoke(prompt)
+        response = await llm.llm.ainvoke(prompt)
         result = response.content.strip()
         
         return result if result in themes else "추리"
