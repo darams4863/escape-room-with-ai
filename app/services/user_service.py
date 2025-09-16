@@ -3,6 +3,7 @@
 from ..core.connections import connections
 from ..core.logger import logger
 from ..core.exceptions import CustomError
+from ..core.monitor import track_performance, track_error, track_user_registration, track_user_login
 from ..models.user import User, Token
 from ..utils.auth import password_manager, jwt_manager
 
@@ -10,13 +11,14 @@ from ..utils.auth import password_manager, jwt_manager
 from ..repositories.user_repository import (
     get_user,
     insert_user,
-    get_user_preferences,
-    upsert_user_preferences,
+    # get_user_preferences,
+    # upsert_user_preferences,
     get_user_by_id,
     update_last_login, 
 )
 
 
+@track_performance("user_creation")
 async def create_user(username: str, password: str) -> User:
     """사용자 생성"""
     try:
@@ -38,6 +40,9 @@ async def create_user(username: str, password: str) -> User:
         # 새 사용자 생성
         user_record = await insert_user(username, hashed_password)
         
+        # 사용자 등록 메트릭 추적
+        track_user_registration()
+        
         logger.info(f"New user created: {user_record}")
             
         return User(
@@ -48,7 +53,10 @@ async def create_user(username: str, password: str) -> User:
             is_active=user_record['is_active']
         )
             
+    except CustomError:
+        raise
     except Exception as e:
+        track_error("database_error", "/auth/register", "POST", None)
         logger.error(
             f"User creation error: {e}", 
             error_type="database_error",
@@ -56,6 +64,7 @@ async def create_user(username: str, password: str) -> User:
         )
         raise CustomError("DB_ERROR", "사용자 생성 중 데이터베이스 오류가 발생했습니다.")
 
+@track_performance("user_authentication")
 async def authenticate_user(username: str, password: str, client_ip: str = None) -> Token:
     """사용자 인증 및 토큰 발급"""
     try:
@@ -91,6 +100,9 @@ async def authenticate_user(username: str, password: str, client_ip: str = None)
             expire_seconds=3600  # 1시간
         )
             
+        # 사용자 로그인 메트릭 추적
+        track_user_login()
+        
         # 🆕 로그인 IP 및 시간 업데이트
         if client_ip:
             # Repository 함수 사용
@@ -108,7 +120,10 @@ async def authenticate_user(username: str, password: str, client_ip: str = None)
             
             return Token(**token_data)
             
+    except CustomError:
+        raise
     except Exception as e:
+        track_error("database_error", "/auth/login", "POST", None)
         logger.error(
             f"Authentication error: {e}",
             error_type="database_error",
@@ -116,6 +131,7 @@ async def authenticate_user(username: str, password: str, client_ip: str = None)
         )
         raise CustomError("DB_ERROR", "인증 중 데이터베이스 오류가 발생했습니다.")
 
+@track_performance("token_verification")
 async def verify_token_and_get_user(token: str) -> User | None:
     """토큰 검증 및 사용자 반환 (Redis 확인 포함)"""
     try:
@@ -139,6 +155,7 @@ async def verify_token_and_get_user(token: str) -> User | None:
         return user
         
     except Exception as e:
+        track_error("token_verification_error", "/auth/verify", "GET", None)
         logger.error(f"Token verification error: {e}")
         return None
 

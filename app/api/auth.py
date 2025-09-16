@@ -39,7 +39,9 @@ async def register(user_data: UserCreate):
         )
         
         return user
-        
+    except CustomError as e:
+        logger.error(f"Registration error: {e.message}")
+        raise e.to_http_exception()
     except Exception as e:
         logger.error(f"Registration error: {e}")
         raise e
@@ -81,7 +83,7 @@ async def login(login_data: UserLogin, request: Request):
         return token
         
     except CustomError as e:
-        logger.warning(f"Login failed: {e.message}")
+        logger.error(f"Login error: {e.message}")
         raise e.to_http_exception()
     except Exception as e:
         logger.error(f"Login error: {e}")
@@ -97,7 +99,7 @@ async def get_current_user(
     try:
         return await get_current_user_from_token(credentials.credentials)
     except CustomError as e:
-        logger.warning(f"Authentication failed: {e.message}")
+        logger.error(f"Authentication failed: {e.message}")
         raise e.to_http_exception()
     except Exception as e:
         logger.error(f"Authentication error: {e}")

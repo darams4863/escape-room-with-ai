@@ -3,15 +3,18 @@
 import re
 import uuid
 import json
+import time
 from ..utils.time import now_korea_iso
 from typing import List, Dict, Any
 
 from ..core.logger import logger
 from ..core.connections import redis_manager
 from ..core.constants import PREFERENCE_STEPS
+from ..core.monitor import (
+    track_chat_message, 
+    track_error
+)
 from fastapi import HTTPException
-
-from ..core.config import settings
 from ..core.exceptions import CustomError
 from ..models.escape_room import ChatResponse, ChatMessage
 
@@ -32,11 +35,11 @@ from .nlp_service import (
     analyze_theme_answer
 )
 from .recommendation_service import get_escape_room_recommendations
-
-# LLM 서비스는 core/llm.py에서 import
+from .rag_service import rag_service
+from .analytics_service import extract_entities_from_message as extract_analytics_entities
 from ..core.llm import llm
+from ..core.connections import rmq
 
-# 중복된 LLMService 클래스 제거됨 - core/llm.py의 llm 인스턴스 사용
 
 # ===== 헬퍼 함수들 =====
 
@@ -44,7 +47,7 @@ async def _save_conversation(session_id: str, conversation_history: List[ChatMes
     """대화 저장 (Redis + PostgreSQL)"""
     messages_data = []
     for msg in conversation_history:
-        timestamp = msg.timestamp.isoformat() if msg.timestamp else now_korea_iso()
+        timestamp = msg.timestamp.isoformat() if msg.timestamp and hasattr(msg.timestamp, 'isoformat') else now_korea_iso()
         messages_data.append({
             "role": msg.role,
             "content": msg.content,
@@ -95,15 +98,17 @@ def _parse_messages(data: Any) -> List[ChatMessage]:
 
 
 async def chat_with_user(
-    user_id: int,
-    message: str,
+    user_id: int, 
+    message: str, 
     session_id: str | None = None
 ) -> ChatResponse:
     """통합 채팅 처리 - 선호도 파악 + 방탈출 추천 (Service 계층에서 예외 처리)"""
+    start_time = time.time()
+    
     try:
         # 입력 검증
-        if not message or not message.strip():
-            raise CustomError("VALIDATION_ERROR", "메시지를 입력해주세요.")
+        # if not message or not message.strip():
+        #     raise CustomError("VALIDATION_ERROR", "메시지를 입력해주세요.")
         
         if len(message) > 500:
             raise CustomError("VALIDATION_ERROR", "메시지가 너무 깁니다. (최대 500자)")
@@ -118,6 +123,20 @@ async def chat_with_user(
         
         # 로깅
         logger.user_action(str(user_id), "chat_request", f"Chat request: {sanitized_message[:50]}...")
+        
+        # 비즈니스 인사이트용 로깅 (RMQ 비동기)
+        entities = await extract_analytics_entities(sanitized_message)
+        rmq.publish_user_action({
+            "user_id": user_id,
+            "session_id": session_id or "unknown",
+            "action": "chat_request",
+            "data": {
+                "message": sanitized_message[:100],
+                "message_length": len(sanitized_message),
+                "regions": entities["regions"],
+                "themes": entities["themes"]
+            }
+        })
         
         # 사용자 챗 세션 확인 및 생성 
         session_info = await get_or_create_user_session(user_id, session_id)
@@ -151,13 +170,65 @@ async def chat_with_user(
             is_questionnaire_active=getattr(response, 'is_questionnaire_active', False)
         )
         
+        # 비즈니스 인사이트용 응답 로깅 (RMQ 비동기)
+        rmq.publish_user_action({
+            "user_id": user_id,
+            "session_id": session_info["session_id"],
+            "action": "chat_response",
+            "data": {
+                "chat_type": getattr(response, 'chat_type', 'unknown'),
+                "is_questionnaire_active": getattr(response, 'is_questionnaire_active', False),
+                "has_recommendations": bool(getattr(response, 'recommendations', None)),
+                "used_rag": getattr(response, 'used_rag', False)
+            }
+        })
+        
+        # 메트릭 수집
+        response_time = (time.time() - start_time) * 1000
+        track_chat_message(
+            user_id=user_id,
+            session_id=session_info["session_id"],
+            message_length=len(sanitized_message),
+            response_time_ms=response_time,
+            chat_type=getattr(response, 'chat_type', 'unknown'),
+            used_rag=getattr(response, 'used_rag', False),
+            success=True
+        )
+        
         return response
         
-    except (CustomError, HTTPException):
+    except (CustomError, HTTPException) as e:
+        # 에러 메트릭 수집
+        response_time = (time.time() - start_time) * 1000
+        track_chat_message(
+            user_id=user_id,
+            session_id=session_id or "unknown",
+            message_length=len(sanitized_message),
+            response_time_ms=response_time,
+            chat_type="error",
+            used_rag=False,
+            success=False,
+            error_type=type(e).__name__
+        )
+        track_error(type(e).__name__, "/chat", "POST", user_id)
+        
         # CustomError와 HTTPException은 그대로 전파 (Global Exception Handler에서 처리)
         raise
     except Exception as e:
         # 예상치 못한 에러는 CustomError로 변환
+        response_time = (time.time() - start_time) * 1000
+        track_chat_message(
+            user_id=user_id,
+            session_id=session_id or "unknown",
+            message_length=len(sanitized_message),
+            response_time_ms=response_time,
+            chat_type="error",
+            used_rag=False,
+            success=False,
+            error_type="unexpected_error"
+        )
+        track_error("unexpected_error", "/chat", "POST", user_id)
+        
         logger.error(f"Unexpected error in chat_with_user: {e}", user_id=user_id, error_type="unexpected_error")
         raise CustomError("CHATBOT_ERROR", "챗봇 처리 중 오류가 발생했습니다.")
 
@@ -358,20 +429,20 @@ async def _handle_first_preference_question(session_id: str) -> ChatResponse:
     )
     conversation_history = [ai_message]
     await _save_conversation(session_id, conversation_history)
-    
+        
     return ChatResponse(
-        message=_get_greeting_message(),
+    message=_get_greeting_message(),
         session_id=session_id,
-        questionnaire={
-            "type": next_step,
-            "question": PREFERENCE_STEPS[next_step]["question"],
-            "options": PREFERENCE_STEPS[next_step]["options"],
-            "next_step": PREFERENCE_STEPS[next_step]["next"]
-        },
-        chat_type="preference_start",
+    questionnaire={
+        "type": next_step,
+        "question": PREFERENCE_STEPS[next_step]["question"],
+        "options": PREFERENCE_STEPS[next_step]["options"],
+        "next_step": PREFERENCE_STEPS[next_step]["next"]
+    },
+    chat_type="preference_start",
         is_questionnaire_active=True
     )
-
+    
 async def _handle_next_preference_question(session_id: str, current_step: str, next_step: str) -> ChatResponse:
     """다음 선호도 질문 처리"""
     await _set_current_preference_step(session_id, next_step)
@@ -446,16 +517,16 @@ async def _process_preference_answer(
         logger.error(f"Preference processing failed: {e.message}")
         return ChatResponse(
             message=f"죄송합니다. 답변 저장에 실패했습니다. 다시 시도해주세요.\n\n{user_answer}",
-            session_id=session_id,
-            questionnaire={
+                session_id=session_id,
+                questionnaire={
                 "type": current_step,
                 "question": PREFERENCE_STEPS[current_step]["question"],
                 "options": PREFERENCE_STEPS[current_step]["options"],
                 "next_step": PREFERENCE_STEPS[current_step].get("next")
             },
             chat_type="preference_retry",
-            is_questionnaire_active=True
-        )
+                is_questionnaire_active=True
+            )
     except Exception as e:
         # 기타 예외 발생 시
         logger.error(f"Unexpected error in preference processing: {e}")
@@ -549,7 +620,7 @@ async def _save_preference_answer(user_id: int, step: str, answer: str, user_pre
             if analyzed_answer == "experienced":
                 user_prefs[field] = "방소년"  # 기본값
             else:
-                user_prefs[field] = "방생아"
+                    user_prefs[field] = "방생아"
                 
         elif step == "experience_count":
             analyzed_count = await analyze_experience_count(answer)
@@ -603,7 +674,7 @@ async def get_or_create_user_session(user_id: int, session_id: str | None = None
     success = await create_session(str(user_id), new_session_id)
     if not success:
         return None
-        
+
     # Redis에 세션 정보 저장 (하나만)
     session_data = {
         "session_id": new_session_id,
@@ -627,7 +698,6 @@ async def handle_general_chat(
     user_prefs: Dict, 
 ) -> ChatResponse:
     """방탈출 추천을 위한 일반 챗봇 대화 처리"""
-    # 사용자 메시지 추가
     user_message_obj = ChatMessage(
         role="user",
         content=user_message
@@ -661,7 +731,7 @@ async def _analyze_user_intent_with_llm(user_message: str, conversation_history:
         {
             "role": msg.role,
             "content": msg.content,
-            "timestamp": msg.timestamp.isoformat() if msg.timestamp else None
+            "timestamp": msg.timestamp.isoformat() if msg.timestamp and hasattr(msg.timestamp, 'isoformat') else None
         }
         for msg in conversation_history[-6:]  # 최근 6개 메시지만 (토큰 절약)
     ]
@@ -677,22 +747,46 @@ async def _handle_recommendation_request(
     conversation_history: List[ChatMessage],
     user_intent: Dict
 ) -> ChatResponse:
-    """방탈출 추천 요청 처리"""
-    # 엔티티에서 추천 조건 추출
-    entities = user_intent.get("entities", {})
+    """RAG 기반 방탈출 추천 요청 처리"""
     
-    # 실제 방탈출 추천 조회
-    recommendations = await get_escape_room_recommendations(user_message, user_prefs)
-    
-    # 추천 결과를 포함한 응답 생성
-    if recommendations:
-        # 추천 결과 요약
-        rec_summary = "\n".join([
-            f"• {rec.name} ({rec.theme}, {rec.region}, 난이도: {rec.difficulty_level})"
-            for rec in recommendations[:3]
-        ])
+    try:
+        # RAG 사용 여부 결정
+        should_use_rag = await rag_service.should_use_rag(user_message, user_prefs)
         
-        response_text = f"""
+        if should_use_rag:
+            # RAG 기반 응답 생성
+            logger.info(f"Using RAG for recommendation: {user_message[:50]}...")
+            
+            # 대화 기록을 딕셔너리 형태로 변환
+            conversation_dict = [
+                {"role": msg.role, "content": msg.content}
+                for msg in conversation_history[-6:]  # 최근 6개 메시지만
+            ]
+            
+            # RAG 응답 생성
+            response_text = await rag_service.generate_rag_response(
+                user_message=user_message,
+                user_prefs=user_prefs,
+                conversation_history=conversation_dict
+            )
+            
+            # RAG에서 검색된 방탈출 정보 추출 (응답에서 파싱)
+            recommendations = await _extract_recommendations_from_rag_response(response_text)
+            
+        else:
+            # 기존 추천 시스템 사용
+            logger.info(f"Using traditional recommendation system")
+            recommendations = await get_escape_room_recommendations(user_message, user_prefs)
+            
+            if recommendations:
+                # 추천 결과 요약
+                rec_summary = "\n".join([
+                    f"• {rec.name} ({rec.theme}, {rec.region}, 난이도: {rec.difficulty_level})"
+                    for rec in recommendations[:3]
+                ])
+                
+                entities = user_intent.get("entities", {})
+                response_text = f"""
 {entities.get('region', '')}에서 {entities.get('theme', '')} 테마로 추천해드릴게요!
 
 🎯 **추천 방탈출:**
@@ -700,24 +794,112 @@ async def _handle_recommendation_request(
 
 더 자세한 정보나 다른 조건으로 추천받고 싶으시면 말씀해주세요!
 """
-    else:
-        response_text = "죄송합니다. 조건에 맞는 방탈출을 찾지 못했습니다. 다른 조건으로 시도해보시겠어요?"
-    
-    # 응답 저장 및 반환
-    ai_message = ChatMessage(role="assistant", content=response_text)
-    conversation_history.append(ai_message)
-    await _save_conversation(session_id, conversation_history)
-    
-    return ChatResponse(
-        message=response_text,
-        session_id=session_id,
-        questionnaire=None,
-        recommendations=recommendations[:3] if recommendations else None,
-        user_profile=await extract_user_profile(conversation_history, user_prefs),
-        chat_type="recommendation",
-        is_questionnaire_active=False
-    )
+            else:
+                response_text = "죄송합니다. 조건에 맞는 방탈출을 찾지 못했습니다. 다른 조건으로 시도해보시겠어요?"
         
+        # 응답 저장 및 반환
+        ai_message = ChatMessage(role="assistant", content=response_text)
+        conversation_history.append(ai_message)
+        await _save_conversation(session_id, conversation_history)
+        
+        return ChatResponse(
+            message=response_text,
+            session_id=session_id,
+            questionnaire=None,
+            recommendations=recommendations[:3] if recommendations else None,
+            user_profile=await extract_user_profile(conversation_history, user_prefs),
+            chat_type="recommendation",
+            is_questionnaire_active=False
+        )
+            
+    except Exception as e:
+        logger.error(f"RAG recommendation error: {e}")
+        # RAG 실패 시 기존 시스템으로 폴백
+        recommendations = await get_escape_room_recommendations(user_message, user_prefs)
+        response_text = "죄송합니다. 추천 시스템에 일시적인 문제가 발생했습니다. 다시 시도해주세요."
+        
+        ai_message = ChatMessage(role="assistant", content=response_text)
+        conversation_history.append(ai_message)
+        await _save_conversation(session_id, conversation_history)
+        
+        return ChatResponse(
+            message=response_text,
+            session_id=session_id,
+            questionnaire=None,
+            recommendations=recommendations[:3] if recommendations else None,
+            user_profile=await extract_user_profile(conversation_history, user_prefs),
+            chat_type="recommendation",
+            is_questionnaire_active=False
+        )
+
+
+async def _extract_recommendations_from_rag_response(response_text: str) -> List[Dict[str, Any]]:
+    """RAG 응답에서 방탈출 추천 정보 추출"""
+    try:
+        # RAG 응답에서 방탈출 이름을 추출하여 실제 데이터 조회
+        # 간단한 구현: 응답에서 방탈출 이름 패턴 추출
+        import re
+        
+        # 방탈출 이름 패턴 추출 (예: "**방탈출명**" 형태)
+        room_names = re.findall(r'\*\*(.*?)\*\*', response_text)
+        
+        if not room_names:
+            return []
+        
+        # 실제 방탈출 데이터 조회
+        recommendations = []
+        for room_name in room_names[:3]:  # 최대 3개
+            # 실제 DB에서 방탈출 정보 조회 (간단한 구현)
+            # 실제로는 더 정교한 매칭 로직이 필요
+            room_data = await _get_room_by_name(room_name)
+            if room_data:
+                recommendations.append(room_data)
+        
+        return recommendations
+        
+    except Exception as e:
+        logger.error(f"Failed to extract recommendations from RAG response: {e}")
+        return []
+
+
+async def _get_room_by_name(room_name: str) -> Dict[str, Any] | None:
+    """방탈출 이름으로 실제 데이터 조회"""
+    try:
+        from ..core.connections import postgres_manager
+        
+        async with postgres_manager.get_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM escape_rooms WHERE name ILIKE $1 LIMIT 1",
+                f"%{room_name}%"
+            )
+            
+            if row:
+                return {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "description": row.get("description", ""),
+                    "theme": row.get("theme"),
+                    "region": row.get("region"),
+                    "sub_region": row.get("sub_region"),
+                    "difficulty_level": row.get("difficulty_level"),
+                    "activity_level": row.get("activity_level"),
+                    "group_size_min": row.get("group_size_min"),
+                    "group_size_max": row.get("group_size_max"),
+                    "duration_minutes": row.get("duration_minutes"),
+                    "price_per_person": row.get("price_per_person"),
+                    "company": row.get("company"),
+                    "rating": float(row["rating"]) if row.get("rating") is not None else None,
+                    "image_url": row.get("image_url"),
+                    "source_url": row.get("source_url"),
+                    "booking_url": row.get("booking_url")
+                }
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to get room by name: {e}")
+        return None
+
 
 async def _handle_general_response(
     session_id: str, 
@@ -747,12 +929,12 @@ async def _handle_general_response(
             user_prefs
         )
         chat_type = "general"
-    
-    # AI 응답 추가
+        
+        # AI 응답 추가
     ai_message = ChatMessage(role="assistant", content=response_text)
     conversation_history.append(ai_message)
     await _save_conversation(session_id, conversation_history)
-    
+        
     return ChatResponse(
         message=response_text,
         session_id=session_id,
@@ -817,7 +999,7 @@ async def extract_user_profile(conversation_history: List[ChatMessage], user_pre
     
     profile = {
         "experience_level": user_prefs.get('experience_level', '방생아') if user_prefs else '방생아',
-        "experience_count": user_prefs.get('experience_count'),
+    "experience_count": user_prefs.get('experience_count'),
         "preferred_difficulty": user_prefs.get('preferred_difficulty'),
         "preferred_regions": user_prefs.get('preferred_regions', []),
         "preferred_group_size": None
@@ -830,7 +1012,6 @@ async def extract_user_profile(conversation_history: List[ChatMessage], user_pre
     
     return profile
         
-
 
 def parse_group_size(message: str) -> int | str | None:
     """유연한 인원수 파싱"""

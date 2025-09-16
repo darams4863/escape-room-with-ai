@@ -2,9 +2,15 @@
 
 import json
 import re
+import time
 from ..utils.time import now_korea_iso
 from typing import Dict, Any, List
 from ..core.logger import logger
+from ..core.monitor import (
+    track_performance,
+    track_external_api_call,
+    track_api_call
+)
 from ..repositories.escape_room_repository import get_intent_patterns_from_db
 from ..core.llm import llm
 from langchain.schema import HumanMessage
@@ -117,6 +123,7 @@ class Intent:
     GENERAL_CHAT = "general_chat" # 일반 대화
     PREFERENCE_CHECK = "preference_check" # 선호도 체크 / cf. QUESTIONNAIRE = "questionnaire"
 
+@track_performance("intent_analysis")
 async def analyze_intent(user_message: str) -> Dict[str, Any]:
     """하이브리드 의도 분석: LLM 우선, DB fallback"""
     try:
@@ -143,12 +150,27 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
         # LLM 서비스의 기존 LLM 인스턴스 사용
         
         prompt = _build_prompt_by_version(
-            settings.nlp_prompt_version, 
+            settings.NLP_PROMPT_VERSION, 
             user_message
         )
         
         # LangChain 방식으로 호출
+        start_time = time.time()
         response = await llm.llm.agenerate([[HumanMessage(content=prompt)]])
+        response_time = (time.time() - start_time) * 1000
+        
+        # API 호출 추적
+        track_api_call(
+            model="gpt-3.5-turbo",
+            operation="intent_analysis",
+            input_tokens=len(prompt.split()),
+            total_tokens=len(prompt.split()) + 50,  # 추정
+            response_time_ms=response_time,
+            success=True
+        )
+        
+        # 외부 API 호출 추적
+        track_external_api_call("openai", "intent_analysis", 200, response_time / 1000)
         
         # 응답 추출
         response_text = response.generations[0][0].text.strip()
@@ -161,8 +183,8 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
             if "_meta" not in intent_data:
                 intent_data["_meta"] = {}
             
-            intent_data["_meta"].setdefault("prompt_version", settings.nlp_prompt_version)
-            intent_data["_meta"].setdefault("schema_version", settings.nlp_schema_version)
+            intent_data["_meta"].setdefault("prompt_version", settings.NLP_PROMPT_VERSION)
+            intent_data["_meta"].setdefault("schema_version", settings.NLP_SCHEMA_VERSION)
             intent_data["_meta"].setdefault("timestamp", now_korea_iso())
             
             return intent_data
@@ -377,6 +399,7 @@ async def analyze_activity_answer(user_answer: str) -> int:
         return 3
     elif any(word in user_lower for word in ["보통", "적당", "2"]):
         return 2
+
     
     # 2단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
@@ -411,12 +434,16 @@ async def analyze_group_size_answer(user_answer: str) -> int:
     
     # 2단계: 키워드 패턴 매칭
     user_lower = user_answer.lower()
-    if any(word in user_lower for word in ["둘이", "2명", "두 명"]):
+    if any(word in user_lower for word in ["둘", "2명", "두 명", "두명", "연인", "커플", "2인", "2 인"]):
         return 2
-    elif any(word in user_lower for word in ["셋이", "3명", "세 명"]):
+    elif any(word in user_lower for word in ["셋", "3명", "세 명", "세명", "3인", "3 인"]):
         return 3
-    elif any(word in user_lower for word in ["넷이", "4명", "네 명"]):
+    elif any(word in user_lower for word in ["넷", "4명", "네 명", "네명", "4인", "4 인"]):
         return 4
+    elif any(word in user_lower for word in ["다섯", "5명", "다섯 명", "다섯명", "5인", "5 인"]):
+        return 5
+    elif any(word in user_lower for word in ["여섯", "6명", "여섯 명", "여섯명", "6인", "6 인"]):
+        return 6
     
     # 3단계: 불분명한 경우만 LLM 사용 (5% 케이스)
     try:
@@ -485,3 +512,152 @@ async def analyze_theme_answer(user_answer: str) -> str:
     except Exception as e:
         logger.error(f"LLM analysis failed: {e}")
         return "추리"  # 안전한 기본값
+
+
+# =============================================================================
+# RAG용 엔티티 추출 함수
+# =============================================================================
+
+async def extract_entities_from_message(user_message: str) -> Dict[str, Any]:
+    """사용자 메시지에서 엔티티 추출 (RAG용)"""
+    try:
+        # 1. LLM 기반 의도 분석으로 엔티티 추출
+        intent_result = await analyze_intent(user_message)
+        entities = intent_result.get("entities", {})
+        
+        # 2. 기본 엔티티 구조 보장
+        default_entities = {
+            "preferred_regions": [],
+            "excluded_regions": [],
+            "preferred_themes": [],
+            "excluded_themes": [],
+            "group_size": None,
+            "difficulty": [],
+            "activity_level": None,
+            "duration": None,
+            "price": None,
+            "company": None,
+            "rating": None
+        }
+        
+        # 3. 추출된 엔티티와 기본값 병합
+        for key, value in entities.items():
+            if key in default_entities:
+                default_entities[key] = value
+        
+        # 4. 추가 키워드 추출 (패턴 매칭)
+        additional_entities = _extract_entities_by_patterns(user_message)
+        
+        # 5. 패턴 매칭 결과와 병합
+        for key, value in additional_entities.items():
+            if value and key in default_entities:
+                if isinstance(default_entities[key], list) and isinstance(value, list):
+                    default_entities[key].extend(value)
+                    default_entities[key] = list(set(default_entities[key]))  # 중복 제거
+                elif not default_entities[key]:  # 기존 값이 없으면 설정
+                    default_entities[key] = value
+        
+        return default_entities
+        
+    except Exception as e:
+        logger.error(f"Entity extraction error: {e}")
+        # 기본값 반환
+        return {
+            "preferred_regions": [],
+            "excluded_regions": [],
+            "preferred_themes": [],
+            "excluded_themes": [],
+            "group_size": None,
+            "difficulty": [],
+            "activity_level": None,
+            "duration": None,
+            "price": None,
+            "company": None,
+            "rating": None
+        }
+
+
+def _extract_entities_by_patterns(user_message: str) -> Dict[str, Any]:
+    """패턴 매칭으로 엔티티 추출"""
+    entities = {}
+    message_lower = user_message.lower()
+    
+    # 지역 추출
+    regions = [
+        '서울', '강남', '강동구', '강북구', '신림', '건대', '구로구', '노원구', 
+        '동대문구', '동작구', '홍대', '신촌', '성동구', '성북구', '잠실', '양천구',
+        '영등포구', '용산구', '은평구', '대학로', '중구', '경기', '고양', '광주',
+        '구리', '군포', '김포', '동탄', '부천', '성남', '수원', '시흥', '안산',
+        '안양', '용인', '의정부', '이천', '일산', '평택', '하남', '부산', '대구',
+        '인천', '광주', '대전', '울산', '제주'
+    ]
+    
+    found_regions = []
+    for region in regions:
+        if region in user_message:
+            found_regions.append(region)
+    
+    if found_regions:
+        entities["preferred_regions"] = found_regions
+    
+    # 테마 추출
+    themes = [
+        '스릴러', '기타', '판타지', '추리', '호러', '공포', '잠입', '모험', '탐험',
+        '감성', '코미디', '드라마', '범죄', '미스터리', 'SF', '19금', '액션',
+        '역사', '로맨스', '아이', '타임어택'
+    ]
+    
+    found_themes = []
+    excluded_themes = []
+    
+    for theme in themes:
+        if theme in user_message:
+            # 제외 키워드 확인
+            if any(exclude_word in message_lower for exclude_word in ['안돼', '싫어', '제외', '빼고', '말고']):
+                excluded_themes.append(theme)
+            else:
+                found_themes.append(theme)
+    
+    if found_themes:
+        entities["preferred_themes"] = found_themes
+    if excluded_themes:
+        entities["excluded_themes"] = excluded_themes
+    
+    # 인원수 추출
+    import re
+    numbers = re.findall(r'\d+', user_message)
+    if numbers:
+        size = int(numbers[0])
+        if 2 <= size <= 10:
+            entities["group_size"] = size
+    
+    # 난이도 추출
+    difficulty_keywords = {
+        '쉬운': [1, 2], '초보': [1, 2], '쉽게': [1, 2],
+        '어려운': [4, 5], '고급': [4, 5], '전문': [4, 5],
+        '보통': [2, 3], '적당': [2, 3], '중급': [2, 3]
+    }
+    
+    for keyword, levels in difficulty_keywords.items():
+        if keyword in message_lower:
+            entities["difficulty"] = levels
+            break
+    
+    # 가격 추출
+    price_patterns = [
+        r'(\d+)만원', r'(\d+)원', r'(\d+)천원'
+    ]
+    
+    for pattern in price_patterns:
+        matches = re.findall(pattern, user_message)
+        if matches:
+            price = int(matches[0])
+            if '만원' in user_message:
+                entities["price"] = price * 10000
+            elif '천원' in user_message:
+                entities["price"] = price * 1000
+            else:
+                entities["price"] = price
+            break
+    
+    return entities

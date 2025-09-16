@@ -3,11 +3,13 @@
 from typing import Dict, Any, List
 from ..models.escape_room import EscapeRoom
 from ..core.logger import logger
+from ..core.monitor import track_performance, track_database_operation
 from ..core.redis_manager import redis_manager
 from .nlp_service import analyze_intent
 from ..repositories.escape_room_repository import get_embedding_based_recommendations
 from ..core.llm import llm
 
+@track_performance("recommendation_generation")
 async def get_escape_room_recommendations(
     user_message: str, 
     user_prefs: Dict[str, Any]

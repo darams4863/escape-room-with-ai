@@ -1,0 +1,419 @@
+{
+    "id": null,
+    "title": "Escape Room With AI Service Dashboard",
+    "uid": "escape-room-with-ai-service",
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 2,
+    "refresh": "10s",
+    "panels": [
+        {
+            "type": "stat",
+            "title": "🔢 총 채팅 메시지",
+            "targets": [
+                {
+                    "expr": "sum(chat_messages_total) or vector(0)",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 0,
+                "y": 0
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 100},
+                            {"color": "red", "value": 500}
+                        ]
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            }
+        },
+        {
+            "type": "stat",
+            "title": "👥 사용자 등록",
+            "targets": [
+                {
+                    "expr": "sum(user_registrations_total) or vector(0)",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 6,
+                "y": 0
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 50},
+                            {"color": "red", "value": 200}
+                        ]
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            }
+        },
+        {
+            "type": "stat",
+            "title": "🔑 사용자 로그인",
+            "targets": [
+                {
+                    "expr": "sum(user_logins_total) or vector(0)",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 12,
+                "y": 0
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 100},
+                            {"color": "red", "value": 500}
+                        ]
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            }
+        },
+        {
+            "type": "stat",
+            "title": "💰 총 비용 (USD)",
+            "targets": [
+                {
+                    "expr": "sum(openai_cost_total_usd) or vector(0)",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 18,
+                "y": 0
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "currencyUSD",
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 10},
+                            {"color": "red", "value": 50}
+                        ]
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            }
+        },
+        {
+            "type": "timeseries",
+            "title": "📈 채팅 메시지 트래픽",
+            "targets": [
+                {
+                    "expr": "sum by (chat_type) (rate(chat_messages_total[5m])) or vector(0)",
+                    "refId": "A",
+                    "legendFormat": "{{chat_type}}"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 4
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "reqps",
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            }
+        },
+        {
+            "type": "timeseries",
+            "title": "⚡ 채팅 응답 시간",
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.95, sum by (le, chat_type) (rate(chat_response_time_seconds_bucket[5m]))) or vector(0)",
+                    "refId": "A",
+                    "legendFormat": "95th percentile - {{chat_type}}"
+                },
+                {
+                    "expr": "histogram_quantile(0.50, sum by (le, chat_type) (rate(chat_response_time_seconds_bucket[5m]))) or vector(0)",
+                    "refId": "B",
+                    "legendFormat": "50th percentile - {{chat_type}}"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 4
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "s",
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            }
+        },
+        {
+            "type": "barchart",
+            "title": "🤖 모델별 API 호출",
+            "targets": [
+                {
+                    "expr": "sum by (model) (rate(api_calls_total[5m])) or vector(0)",
+                    "refId": "A",
+                    "legendFormat": "{{model}}"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 12
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "reqps",
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            },
+            "options": {
+                "orientation": "horizontal",
+                "xField": "model",
+                "yField": "Value"
+            }
+        },
+        {
+            "type": "piechart",
+            "title": "💰 모델별 비용",
+            "targets": [
+                {
+                    "expr": "sum by (model) (openai_cost_total_usd) or vector(0)",
+                    "refId": "A",
+                    "legendFormat": "{{model}}"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 12
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "currencyUSD",
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "right",
+                    "values": ["value", "percent"]
+                },
+                "pieType": "pie",
+                "tooltip": {
+                    "mode": "single"
+                }
+            }
+        },
+        {
+            "type": "barchart",
+            "title": "🔍 RAG 사용률",
+            "targets": [
+                {
+                    "expr": "sum by (search_method) (rate(rag_usage_total[5m])) or vector(0)",
+                    "refId": "A",
+                    "legendFormat": "{{search_method}}"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 20
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "reqps",
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            },
+            "options": {
+                "orientation": "horizontal",
+                "xField": "search_method",
+                "yField": "Value"
+            }
+        },
+        {
+            "type": "table",
+            "title": "❌ API 에러 상세",
+            "targets": [
+                {
+                    "expr": "sum by (error_type, endpoint, method) (api_errors_total) or vector(0)",
+                    "refId": "A",
+                    "format": "table"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 20
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 1},
+                            {"color": "red", "value": 5}
+                        ]
+                    },
+                    "nullValueMode": "null as zero"
+                }
+            },
+            "options": {
+                "showHeader": true,
+                "sortBy": [
+                    {
+                        "desc": true,
+                        "displayName": "Value"
+                    }
+                ]
+            }
+        },
+        {
+            "type": "timeseries",
+            "title": "💾 메모리 사용량",
+            "targets": [
+                {
+                    "expr": "memory_usage_bytes / (1024 * 1024 * 1024)",
+                    "refId": "A",
+                    "legendFormat": "Memory Usage (GB)"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 28
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 2},
+                            {"color": "red", "value": 4}
+                        ]
+                    },
+                    "mappings": [],
+                    "max": 5,
+                    "min": 0
+                }
+            }
+        },
+        {
+            "type": "gauge",
+            "title": "🖥️ CPU 사용률",
+            "targets": [
+                {
+                    "expr": "cpu_usage_percent",
+                    "refId": "A",
+                    "legendFormat": "CPU Usage"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 28
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100,
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 40},
+                            {"color": "red", "value": 60}
+                        ]
+                    }
+                }
+            },
+            "options": {
+                "orientation": "auto",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": ["lastNotNull"],
+                    "fields": ""
+                },
+                "showThresholdLabels": false,
+                "showThresholdMarkers": true
+            }
+        }
+    ],
+    "templating": {
+        "list": []
+    },
+    "annotations": {
+        "list": []
+    }
+}
