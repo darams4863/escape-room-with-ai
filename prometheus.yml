@@ -13,7 +13,8 @@ scrape_configs:
   - job_name: 'escape-room-api'
     static_configs:
       # - targets: ['fastapi:8001']  # Docker 내부 네트워크
-      - targets: ['host.docker.internal:8000']  # 디버깅 - 로컬 FastAPI
+      # - targets: ['host.docker.internal:8000']  # 디버깅 - 로컬 FastAPI
+      - targets: ['host.docker.internal:8001']  # 메트릭 서버 포트
     scrape_interval: 10s
     metrics_path: '/metrics'
     scrape_timeout: 10s

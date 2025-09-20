@@ -363,12 +363,12 @@
         },
         {
             "type": "timeseries",
-            "title": "💾 메모리 사용량",
+            "title": "💾 앱 메모리 사용량",
             "targets": [
                 {
-                    "expr": "memory_usage_bytes / (1024 * 1024 * 1024)",
+                    "expr": "memory_usage_bytes / (1024 * 1024)",
                     "refId": "A",
-                    "legendFormat": "Memory Usage (GB)"
+                    "legendFormat": "App Memory (MB)"
                 }
             ],
             "gridPos": {
@@ -386,24 +386,24 @@
                     "thresholds": {
                         "steps": [
                             {"color": "green", "value": null},
-                            {"color": "yellow", "value": 2},
-                            {"color": "red", "value": 4}
+                            {"color": "yellow", "value": 4},
+                            {"color": "red", "value": 8}
                         ]
                     },
                     "mappings": [],
-                    "max": 5,
+                    "max": 1000,
                     "min": 0
                 }
             }
         },
         {
             "type": "gauge",
-            "title": "🖥️ CPU 사용률",
+            "title": "🖥️ 앱 CPU 사용률",
             "targets": [
                 {
                     "expr": "cpu_usage_percent",
                     "refId": "A",
-                    "legendFormat": "CPU Usage"
+                    "legendFormat": "App CPU %"
                 }
             ],
             "gridPos": {
