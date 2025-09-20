@@ -30,7 +30,7 @@ class Logger:
             "escape-room-ai",
             extra={
                 "service": "escape_room_ai",
-                "version": settings.app_version
+                "version": settings.APP_VERSION
             }
         )
     

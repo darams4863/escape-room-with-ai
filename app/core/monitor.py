@@ -1,292 +1,388 @@
 """
-범용 모니터링 시스템 (MVP → 운영 확장 가능)
-- API 호출 추적 (OpenAI, 기타 외부 API)
-- 성능 모니터링 (응답시간, 성공률)
-- 비용 추적 (토큰 기반)
-- 파일 기반 저장 (나중에 DB/Grafana 연동 가능)
+실무 스타일 모니터링 시스템
+- 핵심 메트릭만 추적
+- Prometheus 기반
+- 사용하지 않는 기능 제거
 """
 
 import time
 import json
+import psutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass, asdict
 from threading import Lock
-from collections import defaultdict
+
+# Prometheus 메트릭 수집
+from prometheus_client import Counter, Histogram, Gauge, start_http_server
+
+# ===== 핵심 Prometheus 메트릭 정의 =====
+
+# 비즈니스 메트릭
+chat_messages_total = Counter(
+    'chat_messages_total', 
+    'Total number of chat messages',
+    ['chat_type', 'success']
+)
+
+rag_usage_total = Counter(
+    'rag_usage_total',
+    'Total number of RAG usage',
+    ['search_method', 'success']
+)
+
+# 사용자 관련 메트릭
+user_registrations_total = Counter(
+    'user_registrations_total',
+    'Total number of user registrations'
+)
+
+user_logins_total = Counter(
+    'user_logins_total',
+    'Total number of user logins'
+)
+
+# 성능 메트릭 (핵심만 유지)
+chat_response_time = Histogram(
+    'chat_response_time_seconds',
+    'Chat response time in seconds',
+    ['chat_type']
+)
+
+# 비용 메트릭 (핵심만 유지)
+openai_cost_total = Counter(
+    'openai_cost_total_usd',
+    'Total OpenAI API cost in USD',
+    ['model']
+)
+
+# 앱 전용 메트릭
+memory_usage_bytes = Gauge(
+    'memory_usage_bytes',
+    'Application memory usage in bytes'
+)
+
+cpu_usage_percent = Gauge(
+    'cpu_usage_percent',
+    'Application CPU usage percentage'
+)
+
+# API 호출 메트릭
+api_calls_total = Counter(
+    'api_calls_total',
+    'Total number of API calls',
+    ['service', 'endpoint', 'status_code']
+)
+
+api_response_time = Histogram(
+    'api_response_time_seconds',
+    'API response time in seconds',
+    ['service', 'endpoint']
+)
+
+# 에러 메트릭
+api_errors_total = Counter(
+    'api_errors_total',
+    'Total number of API errors',
+    ['error_type', 'endpoint', 'method']
+)
+
+# ===== 핵심 메트릭 클래스 =====
 
 @dataclass
-class APIUsageMetric:
-    """OpenAI API 사용량 메트릭"""
+class ChatMetric:
+    """채팅 메트릭"""
+    timestamp: str
+    user_id: int
+    session_id: str
+    message_length: int
+    response_time_ms: float
+    chat_type: str
+    used_rag: bool
+    success: bool
+    error_type: str | None = None
+
+@dataclass
+class APIMetric:
+    """API 메트릭"""
     timestamp: str
     model: str
-    operation: str  # "embedding", "completion"
+    operation: str
     input_tokens: int
     total_tokens: int
     estimated_cost_usd: float
     response_time_ms: float
     success: bool
     error_type: str | None = None
-    batch_size: int = 1
-    
-@dataclass  
-class VectorizationMetric:
-    """벡터화 프로세스 메트릭"""
-    timestamp: str
-    total_items: int
-    successful_items: int
-    failed_items: int
-    batch_count: int
-    total_duration_seconds: float
-    avg_response_time_ms: float
-    total_estimated_cost_usd: float
-    error_breakdown: Dict[str, int]
 
-class MetricsCollector:
-    """실무 메트릭 수집기 (Thread-Safe)"""
+class SimpleMetricsCollector:
+    """단순화된 메트릭 수집기"""
     
     def __init__(self):
         self._lock = Lock()
         self.metrics_dir = Path("data/metrics")
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
         
-        # 메모리 내 메트릭 (실시간 조회용)
-        self.api_metrics: List[APIUsageMetric] = []
-        self.vectorization_sessions: List[VectorizationMetric] = []
+        # 메모리 내 메트릭 (최소한만)
+        self.chat_metrics: List[ChatMetric] = []
+        self.api_metrics: List[APIMetric] = []
         
-        # 집계 데이터 (대시보드용)
-        self.daily_costs = defaultdict(float)
-        self.model_usage = defaultdict(int)
-        self.error_counts = defaultdict(int)
-        
-    def track_api_call(self, 
-                      model: str,
-                      operation: str,
-                      input_tokens: int,
-                      total_tokens: int,
-                      response_time_ms: float,
-                      success: bool = True,
-                      error_type: str | None = None,
-                      batch_size: int = 1) -> APIUsageMetric:
-        """OpenAI API 호출 추적"""
-        
-        # 토큰 기반 비용 계산 (2024년 기준)
-        cost = self._calculate_cost(model, operation, total_tokens)
-        
-        metric = APIUsageMetric(
+        # 집계 데이터 (간단한 것만)
+        self.daily_costs = {}
+        self.error_counts = {}
+    
+    def track_chat_message(
+        self, 
+        user_id: int,
+        session_id: str,
+        message_length: int,
+        response_time_ms: float,
+        chat_type: str,
+        used_rag: bool,
+        success: bool = True,
+        error_type: str | None = None
+    ) -> ChatMetric:
+        """채팅 메시지 추적"""
+        metric = ChatMetric(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            model=model,
-            operation=operation,
-            input_tokens=input_tokens,
-            total_tokens=total_tokens,
-            estimated_cost_usd=cost,
+            user_id=user_id,
+            session_id=session_id,
+            message_length=message_length,
             response_time_ms=response_time_ms,
+            chat_type=chat_type,
+            used_rag=used_rag,
             success=success,
-            error_type=error_type,
-            batch_size=batch_size
+            error_type=error_type
         )
         
         with self._lock:
-            self.api_metrics.append(metric)
-            self._update_aggregates(metric)
-            self._save_api_metric(metric)
+            self.chat_metrics.append(metric)
+            self._save_chat_metric(metric)
+        
+        # Prometheus 메트릭 수집 (고카디널리티 레이블 제거)
+        chat_messages_total.labels(
+            chat_type=chat_type,
+            success=str(success)
+        ).inc()
+        
+        chat_response_time.labels(chat_type=chat_type).observe(response_time_ms / 1000)
         
         return metric
     
-    def start_vectorization_session(self, total_items: int) -> 'VectorizationSession':
-        """벡터화 세션 시작"""
-        return VectorizationSession(self, total_items)
+    
+    def track_error(self, error_type: str, endpoint: str, method: str, user_id: int | None = None):
+        """에러 추적"""
+        with self._lock:
+            self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
+        
+        # Prometheus 메트릭 수집
+        api_errors_total.labels(
+            error_type=error_type,
+            endpoint=endpoint,
+            method=method
+        ).inc()
+    
+    
+    def track_infrastructure_cost(self, service: str, cost_usd: float):
+        """인프라 비용 추적 (MVP에서 제거)"""
+        pass  # MVP에서는 생략
+    
+    def set_memory_usage(self, bytes_used: int):
+        """메모리 사용량 설정"""
+        memory_usage_bytes.set(bytes_used)
+    
+    def set_cpu_usage(self, percent: float):
+        """CPU 사용률 설정"""
+        cpu_usage_percent.set(percent)
+    
     
     def _calculate_cost(self, model: str, operation: str, tokens: int) -> float:
-        """실제 OpenAI 가격표 기반 비용 계산"""
-        # 2024년 1월 기준 가격 (1M 토큰당 USD)
+        """OpenAI 비용 계산"""
         pricing = {
-            'text-embedding-ada-002': 0.0001,      # $0.0001/1K tokens
-            'text-embedding-3-small': 0.00002,     # $0.00002/1K tokens  
-            'text-embedding-3-large': 0.00013,     # $0.00013/1K tokens
+            'text-embedding-ada-002': 0.0001,
+            'text-embedding-3-small': 0.00002,
+            'text-embedding-3-large': 0.00013,
+            'gpt-4o-mini': 0.0006,  # $0.60 per 1M tokens
+            'gpt-4': 0.03,
         }
         
-        rate_per_1k = pricing.get(model, 0.0001)  # 기본값
+        rate_per_1k = pricing.get(model, 0.0001)
         return (tokens / 1000) * rate_per_1k
     
-    def _update_aggregates(self, metric: APIUsageMetric):
-        """집계 데이터 업데이트 (Thread-Safe 내부 호출)"""
-        date_key = metric.timestamp[:10]  # YYYY-MM-DD
-        
-        self.daily_costs[date_key] += metric.estimated_cost_usd
-        self.model_usage[metric.model] += metric.batch_size
-        
-        if not metric.success and metric.error_type:
-            self.error_counts[metric.error_type] += 1
+    def _update_daily_costs(self, metric: APIMetric):
+        """일일 비용 업데이트"""
+        date_key = metric.timestamp[:10]
+        self.daily_costs[date_key] = self.daily_costs.get(date_key, 0) + metric.estimated_cost_usd
     
-    def _save_api_metric(self, metric: APIUsageMetric):
-        """API 메트릭을 파일에 저장 (JSONL)"""
+    def _save_chat_metric(self, metric: ChatMetric):
+        """채팅 메트릭 저장"""
         try:
             date_str = metric.timestamp[:10]
-            metrics_file = self.metrics_dir / f"api_usage_{date_str}.jsonl"
+            metrics_file = self.metrics_dir / f"chat_metrics_{date_str}.jsonl"
             
             with open(metrics_file, 'a', encoding='utf-8') as f:
                 json.dump(asdict(metric), f, ensure_ascii=False)
                 f.write('\n')
-                
         except Exception as e:
-            print(f"⚠️ 메트릭 저장 실패: {e}")
+            print(f"⚠️ 채팅 메트릭 저장 실패: {e}")
+    
+    def _save_api_metric(self, metric: APIMetric):
+        """API 메트릭 저장"""
+        try:
+            date_str = metric.timestamp[:10]
+            metrics_file = self.metrics_dir / f"api_metrics_{date_str}.jsonl"
+            
+            with open(metrics_file, 'a', encoding='utf-8') as f:
+                json.dump(asdict(metric), f, ensure_ascii=False)
+                f.write('\n')
+        except Exception as e:
+            print(f"⚠️ API 메트릭 저장 실패: {e}")
     
     def get_daily_summary(self, date: str | None = None) -> Dict[str, Any]:
-        """일일 사용량 요약"""
+        """일일 요약"""
         if not date:
             date = datetime.now().strftime("%Y-%m-%d")
-            
+        
         with self._lock:
-            today_metrics = [m for m in self.api_metrics if m.timestamp.startswith(date)]
+            today_api_metrics = [m for m in self.api_metrics if m.timestamp.startswith(date)]
+            today_chat_metrics = [m for m in self.chat_metrics if m.timestamp.startswith(date)]
             
-            total_cost = sum(m.estimated_cost_usd for m in today_metrics)
-            total_tokens = sum(m.total_tokens for m in today_metrics)
-            success_rate = (sum(1 for m in today_metrics if m.success) / 
-                          max(len(today_metrics), 1)) * 100
+            total_cost = sum(m.estimated_cost_usd for m in today_api_metrics)
+            total_messages = len(today_chat_metrics)
+            success_rate = (sum(1 for m in today_chat_metrics if m.success) / max(len(today_chat_metrics), 1)) * 100
             
             return {
                 "date": date,
-                "total_calls": len(today_metrics),
-                "total_tokens": total_tokens,
+                "total_messages": total_messages,
                 "total_cost_usd": round(total_cost, 6),
                 "success_rate_percent": round(success_rate, 2),
-                "model_breakdown": self._get_model_breakdown(today_metrics),
-                "avg_response_time_ms": self._get_avg_response_time(today_metrics)
+                "api_calls": len(today_api_metrics)
             }
-    
-    def _get_model_breakdown(self, metrics: List[APIUsageMetric]) -> Dict[str, Dict]:
-        """모델별 사용량 분석"""
-        breakdown = defaultdict(lambda: {"calls": 0, "tokens": 0, "cost": 0.0})
-        
-        for metric in metrics:
-            breakdown[metric.model]["calls"] += 1
-            breakdown[metric.model]["tokens"] += metric.total_tokens
-            breakdown[metric.model]["cost"] += metric.estimated_cost_usd
-            
-        return dict(breakdown)
-    
-    def _get_avg_response_time(self, metrics: List[APIUsageMetric]) -> float:
-        """평균 응답 시간 계산"""
-        if not metrics:
-            return 0.0
-        return sum(m.response_time_ms for m in metrics) / len(metrics)
-    
-    def export_prometheus_metrics(self) -> str:
-        """Prometheus 형식으로 메트릭 내보내기"""
-        lines = [
-            "# HELP openai_api_calls_total Total OpenAI API calls",
-            "# TYPE openai_api_calls_total counter",
-            "# HELP openai_api_cost_usd_total Total OpenAI API cost in USD", 
-            "# TYPE openai_api_cost_usd_total counter",
-            "# HELP openai_api_tokens_total Total tokens used",
-            "# TYPE openai_api_tokens_total counter"
-        ]
-        
-        with self._lock:
-            # 모델별 집계
-            for model, usage in self.model_usage.items():
-                lines.append(f'openai_api_calls_total{{model="{model}"}} {usage}')
-            
-            # 비용 집계  
-            total_cost = sum(self.daily_costs.values())
-            lines.append(f'openai_api_cost_usd_total {total_cost}')
-            
-            # 토큰 집계
-            total_tokens = sum(m.total_tokens for m in self.api_metrics)
-            lines.append(f'openai_api_tokens_total {total_tokens}')
-        
-        return '\n'.join(lines)
-
-class VectorizationSession:
-    """벡터화 세션 트래커 (컨텍스트 매니저)"""
-    
-    def __init__(self, collector: MetricsCollector, total_items: int):
-        self.collector = collector
-        self.total_items = total_items
-        self.successful_items = 0
-        self.failed_items = 0
-        self.batch_count = 0
-        self.start_time = time.time()
-        self.api_calls = []
-        self.error_breakdown = defaultdict(int)
-    
-    def record_batch(self, success_count: int, failure_count: int):
-        """배치 결과 기록"""
-        self.successful_items += success_count
-        self.failed_items += failure_count
-        self.batch_count += 1
-    
-    def record_error(self, error_type: str, count: int = 1):
-        """에러 기록"""
-        self.error_breakdown[error_type] += count
-    
-    def add_api_call(self, metric: APIUsageMetric):
-        """API 호출 메트릭 추가"""
-        self.api_calls.append(metric)
-    
-    def finish(self) -> VectorizationMetric:
-        """세션 종료 및 메트릭 생성"""
-        duration = time.time() - self.start_time
-        
-        total_cost = sum(call.estimated_cost_usd for call in self.api_calls)
-        avg_response_time = (sum(call.response_time_ms for call in self.api_calls) / 
-                           max(len(self.api_calls), 1))
-        
-        metric = VectorizationMetric(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            total_items=self.total_items,
-            successful_items=self.successful_items,
-            failed_items=self.failed_items,
-            batch_count=self.batch_count,
-            total_duration_seconds=duration,
-            avg_response_time_ms=avg_response_time,
-            total_estimated_cost_usd=total_cost,
-            error_breakdown=dict(self.error_breakdown)
-        )
-        
-        with self.collector._lock:
-            self.collector.vectorization_sessions.append(metric)
-            self.collector._save_vectorization_metric(metric)
-        
-        return metric
-    
-    def _save_vectorization_metric(self, metric: VectorizationMetric):
-        """벡터화 메트릭 저장"""
-        try:
-            date_str = metric.timestamp[:10]
-            metrics_file = self.collector.metrics_dir / f"vectorization_{date_str}.jsonl"
-            
-            with open(metrics_file, 'a', encoding='utf-8') as f:
-                json.dump(asdict(metric), f, ensure_ascii=False)
-                f.write('\n')
-                
-        except Exception as e:
-            print(f"⚠️ 벡터화 메트릭 저장 실패: {e}")
 
 # 전역 메트릭 수집기
-metrics_collector = MetricsCollector()
+metrics = SimpleMetricsCollector()
 
-# 편의 함수들
-def track_openai_call(
-    model: str, 
-    operation: str, 
-    input_tokens: int, 
-    total_tokens: int, 
-    response_time_ms: float, 
-    success: bool = True, 
-    error_type: str | None = None,
-    batch_size: int = 1) -> APIUsageMetric:
-    """OpenAI API 호출 추적 (전역 함수)"""
-    return metrics_collector.track_api_call(
-        model, operation, input_tokens, total_tokens, 
-        response_time_ms, success, error_type, batch_size
+# ===== 편의 함수들 =====
+
+def track_chat_message(user_id: int, session_id: str, message_length: int, 
+                      response_time_ms: float, chat_type: str, used_rag: bool, 
+                      success: bool = True, error_type: str | None = None) -> ChatMetric:
+    """채팅 메시지 추적"""
+    return metrics.track_chat_message(
+        user_id, session_id, message_length, response_time_ms, 
+        chat_type, used_rag, success, error_type
     )
 
-def get_daily_usage(date: str | None = None) -> Dict[str, Any]:
-    """일일 사용량 조회"""
-    return metrics_collector.get_daily_summary(date)
 
-def export_metrics_for_grafana() -> str:
-    """Grafana용 메트릭 내보내기"""
-    return metrics_collector.export_prometheus_metrics()
+def track_error(error_type: str, endpoint: str, method: str, user_id: int | None = None):
+    """에러 추적"""
+    return metrics.track_error(error_type, endpoint, method, user_id)
+
+def track_database_operation(operation: str, duration_ms: float, success: bool = True):
+    """데이터베이스 작업 추적 (MVP에서 제거)"""
+    pass  # MVP에서는 생략
+
+def track_redis_operation(operation: str, duration_ms: float, success: bool = True):
+    """Redis 작업 추적 (MVP에서 제거)"""
+    pass  # MVP에서는 생략
+
+def track_api_call(
+    service: str, 
+    endpoint: str, 
+    status_code: int, 
+    duration_seconds: float,
+    model: str = None,
+    cost_usd: float = None
+):
+    """통합된 API 호출 추적"""
+    # 성공 여부 판단
+    success = 200 <= status_code < 300
+    
+    # 비용 계산 (기본값: 내부 API는 비용 없음)
+    if cost_usd is None:
+        cost_usd = 0.0
+    
+    # Prometheus 메트릭 수집
+    if service == "openai" and model and cost_usd > 0:
+        # OpenAI API 호출 (비용 있음)
+        openai_cost_total.labels(model=model).inc(cost_usd)
+    
+    # API 호출 수 메트릭
+    api_calls_total.labels(service=service, endpoint=endpoint, status_code=str(status_code)).inc()
+    
+    # 응답 시간 메트릭
+    api_response_time.labels(service=service, endpoint=endpoint).observe(duration_seconds)
+    
+    return {
+        "service": service,
+        "endpoint": endpoint,
+        "status_code": status_code,
+        "duration_seconds": duration_seconds,
+        "success": success,
+        "cost_usd": cost_usd
+    }
+
+
+def track_infrastructure_cost(service: str, cost_usd: float):
+    """인프라 비용 추적"""
+    return metrics.track_infrastructure_cost(service, cost_usd)
+
+def set_memory_usage(bytes_used: int):
+    """메모리 사용량 설정"""
+    return metrics.set_memory_usage(bytes_used)
+
+
+def track_user_registration():
+    """사용자 등록 추적"""
+    user_registrations_total.inc()
+
+def track_user_login():
+    """사용자 로그인 추적"""
+    user_logins_total.inc()
+
+
+def start_prometheus_server(port: int = 8000):
+    """Prometheus 메트릭 서버 시작"""
+    start_http_server(port)
+    print(f"Prometheus metrics server started on port {port}")
+
+def collect_system_metrics():
+    """앱 전용 메트릭 수집"""
+    try:
+        import os
+        process = psutil.Process(os.getpid())
+        
+        # 앱 메모리 사용량 (RSS - 실제 물리 메모리)
+        app_memory = process.memory_info().rss
+        memory_usage_bytes.set(app_memory)
+        
+        # 앱 CPU 사용률 (첫 번째 측정을 위해 0.1초 대기)
+        app_cpu = process.cpu_percent(interval=0.1)
+        cpu_usage_percent.set(app_cpu)
+        
+        print(f"📱 App - CPU: {app_cpu}%, Memory: {app_memory / (1024**2):.2f}MB")
+        
+    except ImportError:
+        print("psutil not installed, app metrics disabled")
+    except Exception as e:
+        print(f"Error collecting app metrics: {e}")
+
+# ===== 단순한 데코레이터들 =====
+
+def track_performance(metric_name: str):
+    """성능 추적 데코레이터"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            try:
+                result = func(*args, **kwargs)
+                duration = (time.time() - start_time) * 1000
+                print(f"Performance - {metric_name}: {duration:.2f}ms")
+                return result
+            except Exception as e:
+                duration = (time.time() - start_time) * 1000
+                print(f"Performance - {metric_name} failed: {duration:.2f}ms, error: {e}")
+                raise
+        return wrapper
+    return decorator

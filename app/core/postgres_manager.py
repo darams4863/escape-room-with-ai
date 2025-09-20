@@ -1,6 +1,7 @@
 import re
 import asyncio
 import traceback
+import time
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 import uuid
@@ -9,6 +10,7 @@ import asyncpg
 
 from .config import settings
 from .logger import logger
+from .monitor import track_database_operation
 
 
 class PostgresManager:
@@ -29,18 +31,26 @@ class PostgresManager:
         try:
             self.connection_id = str(uuid.uuid4())[:8]
             
-            # URL에서 연결 정보 파싱
-            url_pattern = r'postgresql://(?:([^:]*):([^@]*)@)?([^:/]*):?(\d*)/([^?]*)'
-            match = re.match(url_pattern, settings.database_url)
-            
-            if not match:
-                raise ValueError(f"Invalid PostgreSQL URL format: {settings.database_url}")
-            
-            username, password, host, port, database = match.groups()
-            
-            # 기본값 설정
-            # port = int(port) if port else 5432
-            port = int(port) if port else 5433
+            # URL에서 연결 정보 파싱 (기본값 사용)
+            if hasattr(settings, 'DATABASE_URL') and settings.DATABASE_URL and settings.DATABASE_URL.strip():
+                url_pattern = r'postgresql://(?:([^:]*):([^@]*)@)?([^:/]*):?(\d*)/([^?]*)'
+                match = re.match(url_pattern, settings.DATABASE_URL)
+                
+                if not match:
+                    raise ValueError(f"Invalid PostgreSQL URL format: {settings.DATABASE_URL}")
+                
+                username, password, host, port, database = match.groups()
+                port = int(port) if port else 5433
+            else:
+                # 기본값 사용
+                username = settings.POSTGRES_USER
+                password = settings.POSTGRES_PASSWORD
+                host = settings.POSTGRES_HOST
+                port = settings.POSTGRES_PORT
+                database = settings.POSTGRES_DB
+                
+                # 디버깅용 로그
+                logger.info(f"Using default PostgreSQL settings: host={host}, port={port}, user={username}, db={database}")
             server_settings = server_settings or {'timezone': 'Asia/Seoul'}
             
             self.pool = await asyncpg.create_pool(
@@ -223,13 +233,31 @@ class PostgresManager:
     # 편의 메소드들
     async def execute(self, query: str, *args) -> str:
         """단일 쿼리 실행"""
-        async with self.get_connection() as conn:
-            return await conn.execute(query, *args)
+        start_time = time.time()
+        try:
+            async with self.get_connection() as conn:
+                result = await conn.execute(query, *args)
+                duration = (time.time() - start_time) * 1000
+                track_database_operation("execute", duration, True)
+                return result
+        except Exception as e:
+            duration = (time.time() - start_time) * 1000
+            track_database_operation("execute", duration, False)
+            raise
     
     async def fetch(self, query: str, *args) -> list:
         """다중 행 조회"""
-        async with self.get_connection() as conn:
-            return await conn.fetch(query, *args)
+        start_time = time.time()
+        try:
+            async with self.get_connection() as conn:
+                result = await conn.fetch(query, *args)
+                duration = (time.time() - start_time) * 1000
+                track_database_operation("fetch", duration, True)
+                return result
+        except Exception as e:
+            duration = (time.time() - start_time) * 1000
+            track_database_operation("fetch", duration, False)
+            raise
     
     async def fetchrow(self, query: str, *args) -> asyncpg.Record | None:
         """단일 행 조회"""

@@ -1,6 +1,8 @@
 from .logger import logger
 from .postgres_manager import postgres_manager
 from .redis_manager import redis_manager
+from .rmq_manager import rmq_manager
+from .monitor import collect_system_metrics
 
 
 class ConnectionManager:
@@ -26,6 +28,12 @@ class ConnectionManager:
                 health_check_interval=30
             )
             
+            # RabbitMQ 연결
+            rmq_manager.connect()
+            
+            # 시스템 메트릭 자동 수집 시작
+            collect_system_metrics()
+            
             logger.info("All database connections established successfully")
             
         except Exception as e:
@@ -36,6 +44,7 @@ class ConnectionManager:
         """모든 연결 종료"""
         await postgres_manager.close()
         await redis_manager.close()
+        rmq_manager.disconnect()
         logger.info("All database connections closed")
     
     @property
@@ -48,24 +57,32 @@ class ConnectionManager:
         """Redis 매니저 반환"""
         return redis_manager
     
+    @property
+    def rmq(self):
+        """RabbitMQ 매니저 반환"""
+        return rmq_manager
+    
     async def health_check(self) -> dict:
         """모든 연결 상태 확인"""
         health_status = {
             "postgres": await postgres_manager.health_check(),
             "redis": await redis_manager.ping(),
+            "rmq": rmq_manager.is_connected,
             "overall": False
         }
         
         # 전체 상태
         health_status["overall"] = all([
             health_status["postgres"],
-            health_status["redis"]
+            health_status["redis"],
+            health_status["rmq"]
         ])
         
         logger.debug(
             "Health check completed",
             postgres=health_status["postgres"],
             redis=health_status["redis"],
+            rmq=health_status["rmq"],
             overall=health_status["overall"]
         )
         
@@ -78,4 +95,5 @@ connections = ConnectionManager()
 # 간편한 import를 위한 별칭
 postgres = connections.postgres
 redis = connections.redis
+rmq = connections.rmq
 
