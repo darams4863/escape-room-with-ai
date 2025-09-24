@@ -44,6 +44,21 @@
 - **실시간 모니터링**: Prometheus + Grafana 대시보드
 - **ML 모델 관리**: MLflow를 통한 모델 관리 및 실험 추적
 
+### **데이터 수집 & 저장**
+
+- **크롤링 데이터**: 전국 16개 지역, 85개 서브지역 방탈출 정보 (PostgreSQL)
+- **벡터 데이터**: OpenAI text-embedding-ada-002로 생성된 1536차원 임베딩
+- **메트릭 데이터**: 일별 채팅/추천/에러 메트릭 (JSONL 형식)
+- **로그 데이터**: 애플리케이션 및 크롤링 로그 (구조화된 JSON)
+- **상태 데이터**: 크롤링 진행 상태 및 실패 데이터 (JSON)
+
+### **데이터 활용**
+
+- **메트릭 데이터**: Grafana 대시보드에서 실시간 모니터링 및 비즈니스 인사이트 도출
+- **로그 데이터**: 디버깅, 성능 분석, 에러 추적을 위한 구조화된 로그 분석
+- **크롤링 상태**: 중단된 크롤링 재시작 및 진행률 추적
+- **벡터 데이터**: RAG 하이브리드 검색을 통한 의미적 방탈출 추천
+
 ## 🧠 기술 스택
 
 ### **AI/ML & 데이터 수집**
@@ -125,9 +140,13 @@ escape-room-with-ai/
 │   ├── data_crawler.py   # Selenium 기반 크롤링
 │   ├── vector_generator.py # OpenAI 벡터화
 │   ├── process_dead_letters.py # 실패 데이터 재처리
+│   ├── data/             # 크롤링 상태 & 실패 데이터
+│   │   └── crawling_state.json # 크롤링 진행 상태
+│   ├── logs/             # 크롤링 & 벡터화 로그
+│   │   └── escape-room-ai.log
 │   └── README.md         # 크롤링 파이프라인 문서
 ├── data/                 # 메트릭 데이터
-│   └── metrics/          # 일별 메트릭 파일
+│   └── metrics/          # 일별 메트릭 파일 (JSONL)
 ├── logs/                 # 애플리케이션 로그
 ├── grafana/              # Grafana 대시보드
 ├── prometheus/           # Prometheus 설정
