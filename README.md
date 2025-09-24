@@ -27,7 +27,7 @@
 - **NLP 파이프라인**: LLM 기반 의도 분석(Intent Analysis)과 엔티티 추출(Entity Extraction)을 통한 자연어 이해
 - **의도 분석**: 사용자 메시지의 의도 자동 분류 (room_recommendation, room_inquiry, general_chat)
 - **엔티티 추출**: 대화에서 선호도 정보 자동 추출 (지역, 테마, 인원수, 난이도 등)
-- **RAG 하이브리드 검색**: tsvector(키워드) + pgvector(의미) 검색으로 개인 선호도에 맞는 방탈출 추천
+- **RAG 하이브리드 검색**: tsvector(키워드) + pgvector(의미) 하이브리드 검색으로 개인 선호도에 맞는 방탈출 추천
 - **자연어 대화**: OpenAI GPT 기반 지능형 챗봇 (LangChain 표준)
 
 ### **ML 기반 분석 & 예측**
@@ -155,7 +155,7 @@ escape-room-with-ai/
 1. **의도 분석**: LLM 기반 사용자 메시지 의도 파악 (room_recommendation, room_inquiry, general_chat)
 2. **엔티티 추출**: 대화에서 선호도 정보 자동 추출 (지역, 테마, 인원수, 난이도 등)
 3. **응답 생성**: 의도에 따른 맞춤형 응답 (추천, 정보 제공, 일반 대화)
-4. **추천 생성**: RAG 하이브리드 검색 (tsvector + pgvector)
+4. **추천 생성**: RAG 하이브리드 검색 (tsvector 키워드 + pgvector 의미)
 
 ### **4. 데이터 처리**
 
@@ -228,7 +228,7 @@ graph TB
     end
 
     subgraph "Data Layer"
-        PG[(PostgreSQL<br/>+ pgvector)]
+        PG[(PostgreSQL<br/>+ tsvector + pgvector)]
         RD[(Redis<br/>Cache & Sessions)]
         RMQ[RabbitMQ<br/>Message Queue]
     end

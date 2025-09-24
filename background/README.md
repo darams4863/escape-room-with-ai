@@ -21,7 +21,7 @@ python data_crawler.py
 **크롤링 프로세스:**
 
 1. 메인 페이지 접속 → 필터 버튼 클릭 → 지역 선택
-2. 지역별/서브지역별 순차 크롤링 (15개 지역, 100+ 서브지역)
+2. 지역별/서브지역별 순차 크롤링 (16개 지역, 85+ 서브지역)
 3. 각 카드 클릭하여 상세 정보 수집 (테마명, 업체명, 난이도, 가격, 예약URL 등)
 4. PostgreSQL에 실시간 저장 (중복 방지, 배치 처리)
 5. 크롤링 상태 추적 (`data/crawling_state.json`) - 재시작 지원
@@ -102,7 +102,7 @@ CRAWL_PAGE_TIMEOUT=30       # 페이지 로딩 타임아웃
 3. **🤖 OpenAI API 호출** → 배치 임베딩 생성 (text-embedding-ada-002)
 4. **✅ 품질 검증** → 벡터 품질 검사 (NaN, Inf, 더미 벡터 제거)
 5. **💾 DB 저장** → pgvector 형식으로 PostgreSQL 저장
-6. **🔄 스마트 폴백** → 배치 실패시 개별 처리
+6. **🔄 폴백 로직** → 배치 실패시 개별 처리
 7. **💰 비용 추적** → 실시간 API 사용량 및 비용 모니터링
 
 #### 🎯 **RAG 최적화 텍스트 생성**
@@ -210,8 +210,8 @@ LIMIT 5
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   🕷️ 크롤러      │───▶│   🗄️ PostgreSQL   │───▶│  🧠 벡터 생성기   │
-│  data_crawler   │    │   + pgvector     │    │ vector_generator │
-│                 │    │                  │    │                 │
+│  data_crawler   │    │ + tsvector +     │    │ vector_generator │
+│                 │    │    pgvector      │    │                 │
 │ • 백룸 사이트    │    │ • 방탈출 데이터   │    │ • OpenAI API     │
 │ • 상세 정보 수집 │    │ • 메타데이터      │    │ • 임베딩 생성    │
 │ • 상태 추적      │    │ • 벡터 저장       │    │ • 품질 검증      │
@@ -222,7 +222,9 @@ LIMIT 5
                        │          🤖 AI 챗봇 API             │
                        │         FastAPI + LangChain        │
                        │                                     │
-                       │ • 벡터 유사도 검색                   │
+                       │ • RAG 하이브리드 검색                │
+                       │   - tsvector (키워드)               │
+                       │   - pgvector (의미)                 │
                        │ • 자연어 질의응답                    │
                        │ • 개인화 추천                       │
                        │ • 실시간 대화                       │
@@ -233,7 +235,7 @@ LIMIT 5
 
 ### 💼 **비즈니스 관점에서의 강점**
 
-- **📊 대규모 데이터 처리**: 전국 15개 지역, 100+ 서브지역에서 수천 개 방탈출 데이터 수집
+- **📊 대규모 데이터 처리**: 전국 16개 지역, 85+ 서브지역에서 수천 개 방탈출 데이터 수집
 - **🔄 완전 자동화**: 크롤링 → 벡터화 → AI 검색까지 무인 운영 가능
 - **💰 비용 최적화**: OpenAI API 배치 처리로 벡터화 비용 80% 절약
 - **🛡️ 안정성**: Dead Letter Queue, 재시작 지원, 오류 복구 시스템
@@ -272,66 +274,46 @@ LIMIT 5
 - **품질 보장**: NaN/Inf/더미 벡터 자동 제거
 - **비용 효율**: 배치 처리 + 스마트 폴백
 
-### 🔍 **AI 검색 예시**
+### 🔍 **RAG 하이브리드 검색 예시**
 
 ```python
 # 사용자 질문: "강남에서 2명이 할 수 있는 쉬운 방탈출"
 
-# 1. 질문 벡터화
+# 1. 키워드 추출 및 tsvector 검색
+keywords = ["강남", "2명", "쉬운"]
+tsvector_results = await conn.fetch("""
+    SELECT id, name, region, sub_region, difficulty_level,
+           ts_rank(to_tsvector('korean', name || ' ' || description),
+                   plainto_tsquery('korean', $1)) as ts_score
+    FROM escape_rooms
+    WHERE to_tsvector('korean', name || ' ' || description)
+          @@ plainto_tsquery('korean', $1)
+    ORDER BY ts_score DESC
+    LIMIT 3
+""", ' '.join(keywords))
+
+# 2. 질문 벡터화 및 pgvector 검색
 query_vector = openai.embeddings.create(
     model="text-embedding-ada-002",
     input="강남에서 2명이 할 수 있는 쉬운 방탈출"
 )
 
-# 2. 유사도 검색
-results = await conn.fetch("""
-    SELECT name, region, sub_region, difficulty_level,
-           (embedding <=> $1::vector) as score
+pgvector_results = await conn.fetch("""
+    SELECT id, name, region, sub_region, difficulty_level,
+           (embedding <=> $1::vector) as vector_score
     FROM escape_rooms
     WHERE embedding IS NOT NULL
     ORDER BY embedding <=> $1::vector
-    LIMIT 5
+    LIMIT 3
 """, query_vector)
 
-# 결과:
-# 1. "FILM BY EDDY" (서울 강남) - 난이도 3, 유사도 0.12
-# 2. "미스터리 카페" (서울 강남) - 난이도 2, 유사도 0.15
-# 3. "로맨틱 탈출" (서울 강남) - 난이도 2, 유사도 0.18
-```
+# 3. 하이브리드 랭킹 (tsvector 0.7 + pgvector 0.3)
+final_results = combine_search_results(tsvector_results, pgvector_results)
 
-## 🔄 정기 크롤링 (나중에)
-
-### Celery + Redis 방식 (추천)
-
-```python
-# celery_app.py
-from celery import Celery
-
-app = Celery('crawler')
-app.config_from_object('celeryconfig')
-
-@app.task
-def crawl_backroom_task():
-    # 크롤링 로직
-    pass
-
-# 스케줄링
-app.conf.beat_schedule = {
-    'crawl-daily': {
-        'task': 'crawl_backroom_task',
-        'schedule': crontab(hour=2, minute=0),  # 매일 새벽 2시
-    },
-}
-```
-
-### APScheduler 방식 (더 간단)
-
-```python
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-scheduler = AsyncIOScheduler()
-scheduler.add_job(crawl_backroom, 'cron', hour=2)
-scheduler.start()
+# 최종 결과:
+# 1. "FILM BY EDDY" (서울 강남) - 난이도 3, 하이브리드 점수 0.89
+# 2. "미스터리 카페" (서울 강남) - 난이도 2, 하이브리드 점수 0.85
+# 3. "로맨틱 탈출" (서울 강남) - 난이도 2, 하이브리드 점수 0.82
 ```
 
 ## 📊 데이터베이스 구조
@@ -372,13 +354,6 @@ CREATE TABLE escape_rooms (
 CREATE INDEX IF NOT EXISTS idx_escape_rooms_embedding
 ON escape_rooms USING ivfflat (embedding vector_cosine_ops);
 ```
-
-### 📈 **벡터 검색 성능**
-
-- **인덱스**: IVFFlat 알고리즘 사용
-- **검색 속도**: 수천 개 데이터에서 밀리초 단위
-- **정확도**: 코사인 유사도 기반 의미적 검색
-- **확장성**: pgvector로 대용량 데이터 지원
 
 ### 📝 **실제 데이터 예시**
 
