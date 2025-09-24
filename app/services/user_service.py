@@ -1,21 +1,24 @@
 """사용자 관련 비즈니스 로직 (함수 기반)"""
 
-from ..core.connections import connections
-from ..core.logger import logger
-from ..core.exceptions import CustomError
-from ..core.monitor import track_performance, track_error, track_user_registration, track_user_login
-from ..models.user import User, Token
-from ..utils.auth import password_manager, jwt_manager
+from datetime import datetime, timedelta
+import json
+from typing import Dict
 
-# Repository 함수들 import
-from ..repositories.user_repository import (
-    get_user,
-    insert_user,
-    # get_user_preferences,
-    # upsert_user_preferences,
-    get_user_by_id,
-    update_last_login, 
+from ..core.connections import redis_manager
+from ..core.exceptions import CustomError
+from ..core.logger import logger
+from ..core.monitor import (
+    track_error,
+    track_performance,
+    track_user_login,
+    track_user_registration,
 )
+from ..models.user import Token, User
+from ..repositories.chat_repository import get_latest_session_by_user_id
+from ..repositories.user_repository import get_user, insert_user, update_last_login
+from ..services.chat_service import get_or_create_user_session
+from ..utils.auth import jwt_manager, password_manager
+from ..utils.time import now_korea_iso
 
 
 @track_performance("user_creation")
@@ -93,7 +96,7 @@ async def authenticate_user(username: str, password: str, client_ip: str = None)
             username=user_record['username']
         )
             
-        # Redis에 토큰 저장 (1시간 만료)
+        # Redis에 토큰 저장 (1시간 만료) + 세션 복원
         await _store_token_in_redis(
             user_id=user_record['id'],
             token=token_data['access_token'],
@@ -131,67 +134,119 @@ async def authenticate_user(username: str, password: str, client_ip: str = None)
         )
         raise CustomError("DB_ERROR", "인증 중 데이터베이스 오류가 발생했습니다.")
 
-@track_performance("token_verification")
-async def verify_token_and_get_user(token: str) -> User | None:
-    """토큰 검증 및 사용자 반환 (Redis 확인 포함)"""
-    try:
-        # JWT 토큰 검증
-        payload = jwt_manager.verify_token(token)
-        if not payload:
-            return None
-        
-        user_id = payload.get('user_id')
-        if not user_id:
-            return None
-        
-        # Redis에서 토큰 확인
-        is_valid = await _verify_token_in_redis(user_id, token)
-        if not is_valid:
-            logger.warning(f"Token not found in Redis", user_id=user_id)
-            return None
-        
-        # 사용자 조회
-        user = await get_user_by_id(user_id)
-        return user
-        
-    except Exception as e:
-        track_error("token_verification_error", "/auth/verify", "GET", None)
-        logger.error(f"Token verification error: {e}")
-        return None
 
-async def get_current_user_from_token(token: str) -> User:
-    """토큰에서 현재 사용자 정보 추출 (서비스 레이어)"""
+# Redis 토큰 관리 헬퍼 함수 (통합 세션 구조)
+async def _store_token_in_redis(user_id: int, token: str, expire_seconds: int = 3600):
+    """통합 세션에 토큰 저장 (기존 토큰 삭제)"""
     try:
-        user = await verify_token_and_get_user(token)
-        if not user:
-            raise CustomError("INVALID_TOKEN")
-        return user
+        # 1. 기존 토큰 삭제
+        await _invalidate_existing_tokens(user_id)
+        
+        # 2. 통합 세션에 토큰 저장
+        user_session_key = f"user_session:{user_id}"
+        existing_session = await redis_manager.get(user_session_key)
+        
+        if existing_session:
+            # 기존 세션이 있으면 토큰만 업데이트
+            session_data = json.loads(existing_session)
+            session_data["access_token"] = token
+            current_time = datetime.now()
+            session_data["token_expires_at"] = (current_time + timedelta(seconds=expire_seconds)).isoformat()
+            
+            await redis_manager.set(
+                key=user_session_key,
+                value=json.dumps(session_data, ensure_ascii=False),
+                ex=expire_seconds
+            )
+            
+            logger.info(f"Token updated in existing session: {user_id}")
+        else:
+            # 세션이 없으면 DB에서 기존 세션 복원 시도
+            session_data = await _restore_session_from_db(user_id)
+            
+            if session_data:
+                # DB에서 복원된 세션에 토큰 추가
+                session_data["access_token"] = token
+                current_time = datetime.now()
+                session_data["token_expires_at"] = (current_time + timedelta(seconds=expire_seconds)).isoformat()
+                
+                await redis_manager.set(
+                    key=user_session_key,
+                    value=json.dumps(session_data, ensure_ascii=False),
+                    ex=expire_seconds
+                )
+                
+                logger.info(f"Token stored in restored session: {user_id}")
+            else:
+                # DB에도 세션이 없으면 새로 생성
+                await get_or_create_user_session(user_id)
+                
+                # 다시 시도
+                existing_session = await redis_manager.get(user_session_key)
+                if existing_session:
+                    session_data = json.loads(existing_session)
+                    session_data["access_token"] = token
+                    current_time = datetime.now()
+                    session_data["token_expires_at"] = (current_time + timedelta(seconds=expire_seconds)).isoformat()
+                    
+                    await redis_manager.set(
+                        key=user_session_key,
+                        value=json.dumps(session_data, ensure_ascii=False),
+                        ex=expire_seconds
+                    )
+                    
+                    logger.info(f"Token stored in new session: {user_id}")
+        
     except CustomError:
         raise
-    except Exception as e:
-        logger.error(f"Get current user error: {e}")
-        raise CustomError("AUTH_ERROR", "사용자 인증 중 오류가 발생했습니다.")
-
-
-
-# Redis 토큰 관리 헬퍼 함수들
-async def _store_token_in_redis(user_id: int, token: str, expire_seconds: int = 3600):
-    """Redis에 토큰 저장"""
-    try:
-        await connections.redis.set(
-            key=f"user_token:{user_id}:{token[-8:]}",  # 토큰 마지막 8자리로 키 생성
-            value=token,
-            ex=expire_seconds
-        )
     except Exception as e:
         logger.error(f"Failed to store token in Redis: {e}", user_id=user_id)
         raise
 
-async def _verify_token_in_redis(user_id: int, token: str) -> bool:
-    """Redis에서 토큰 확인"""
+async def _restore_session_from_db(user_id: int) -> Dict | None:
+    """DB에서 사용자의 최신 세션을 조회하여 세션 데이터 반환"""
     try:
-        stored_token = await connections.redis.get(f"user_token:{user_id}:{token[-8:]}")
-        return stored_token == token
+        # DB에서 최신 세션 조회
+        latest_session = await get_latest_session_by_user_id(user_id)
+        
+        if latest_session:
+            # DB 세션 데이터를 Redis 형식으로 변환
+            session_data = {
+                "session_id": latest_session["session_id"],
+                "user_id": user_id,
+                "created_at": latest_session["created_at"].isoformat() if latest_session["created_at"] else now_korea_iso(),
+                "messages": json.loads(latest_session["conversation_history"]).get("messages", []),
+                "last_activity": latest_session["updated_at"].isoformat() if latest_session["updated_at"] else now_korea_iso()
+            }
+            
+            logger.info(f"Found existing session in DB for user {user_id}: {latest_session['session_id']}")
+            return session_data
+        else:
+            logger.debug(f"No existing session found in DB for user {user_id}")
+            return None
+            
     except Exception as e:
-        logger.error(f"Failed to verify token in Redis: {e}", user_id=user_id)
-        return False
+        logger.error(f"Failed to restore session from DB: {e}", user_id=user_id)
+        return None
+
+async def _invalidate_existing_tokens(user_id: int):
+    """기존 토큰 무효화"""
+    try:
+        # 통합 세션에서 토큰 제거
+        user_session_key = f"user_session:{user_id}"
+        existing_session = await redis_manager.get(user_session_key)
+        
+        if existing_session:
+            session_data = json.loads(existing_session)
+            if "access_token" in session_data:
+                del session_data["access_token"]
+                del session_data["token_expires_at"]
+                
+                await redis_manager.set(
+                    key=user_session_key,
+                    value=json.dumps(session_data, ensure_ascii=False),
+                    ex=86400
+                )
+                
+    except Exception as e:
+        logger.error(f"Failed to invalidate existing tokens: {e}", user_id=user_id)

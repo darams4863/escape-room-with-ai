@@ -1,13 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from ..core.logger import logger, get_user_logger
+from fastapi import APIRouter, HTTPException, Request, status
+
 from ..core.exceptions import CustomError
-from ..models.user import User, UserCreate, UserLogin, Token
-from ..services.user_service import create_user, authenticate_user, get_current_user_from_token
+from ..core.logger import get_user_logger, logger
+from ..models.user import Token, User, UserCreate, UserLogin
+from ..services.user_service import authenticate_user, create_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
-security = HTTPBearer()
-
 
 @router.post(
     "/register", 
@@ -92,31 +90,6 @@ async def login(login_data: UserLogin, request: Request):
             detail="로그인 처리 중 오류가 발생했습니다."
         )
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> User:
-    """현재 인증된 사용자 반환 (FastAPI 의존성 주입용)"""
-    try:
-        return await get_current_user_from_token(credentials.credentials)
-    except CustomError as e:
-        logger.error(f"Authentication failed: {e.message}")
-        raise e.to_http_exception()
-    except Exception as e:
-        logger.error(f"Authentication error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="인증 처리 중 오류가 발생했습니다.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
-@router.get("/me", response_model=User,
-    summary="현재 사용자 정보 조회",
-    description="현재 사용자 정보를 조회하는 API"
-)
-async def get_me(current_user: User = Depends(get_current_user)):
-    """현재 사용자 정보 조회"""
-    return current_user
 
 
 
