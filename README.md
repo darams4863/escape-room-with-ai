@@ -13,6 +13,15 @@
 
 ## 🚀 주요 기능
 
+### **데이터 수집 & AI 벡터화 파이프라인**
+
+- **자동 크롤링**: Selenium 기반 고급 크롤링으로 전국 16개 지역, 85개 서브지역에서 방탈출 데이터 수집
+- **AI 벡터화**: OpenAI text-embedding-ada-002로 1536차원 벡터 생성하여 의미적 검색 구현
+- **품질 보장**: NaN/Inf/더미 벡터 자동 제거 및 벡터 품질 검증 시스템
+- **배치 처리**: API 비용 80% 절약하는 효율적 벡터화 및 Dead Letter Queue를 통한 안정성 확보
+
+> 📋 **상세 구현 설명**: [background/README.md](background/README.md)에서 크롤링 시나리오, 벡터화 프로세스, 비용 모니터링 등 세부사항 확인
+
 ### **AI 챗봇 & 추천 시스템**
 
 - **NLP 파이프라인**: LLM 기반 의도 분석(Intent Analysis)과 엔티티 추출(Entity Extraction)을 통한 자연어 이해
@@ -37,14 +46,16 @@
 
 ## 🧠 기술 스택
 
-### **AI/ML**
+### **AI/ML & 데이터 수집**
 
 - **LangChain**: 확장 가능한 LLM 서비스 아키텍처
 - **OpenAI GPT-4o-mini**: 메인 LLM (비용 효율성)
+- **OpenAI text-embedding-ada-002**: 1536차원 벡터 임베딩
 - **NLP**: 의도 분석, 엔티티 추출, 자연어 이해
 - **PyTorch**: LSTM + Attention 모델 구현
 - **MLflow**: 모델 관리 및 실험 추적
 - **RAG**: tsvector(키워드) + pgvector(의미) 하이브리드 검색
+- **Selenium**: 고급 웹 크롤링 및 봇 탐지 우회
 
 ### **Backend & Database**
 
@@ -110,6 +121,11 @@ escape-room-with-ai/
 │   ├── utils/            # 유틸리티 (인증, 시간 관리)
 │   └── workers/          # 백그라운드 워커
 │       └── rmq_worker.py # RabbitMQ 메시지 처리
+├── background/           # 데이터 수집 & 벡터화 파이프라인
+│   ├── data_crawler.py   # Selenium 기반 크롤링
+│   ├── vector_generator.py # OpenAI 벡터화
+│   ├── process_dead_letters.py # 실패 데이터 재처리
+│   └── README.md         # 크롤링 파이프라인 문서
 ├── data/                 # 메트릭 데이터
 │   └── metrics/          # 일별 메트릭 파일
 ├── logs/                 # 애플리케이션 로그
@@ -123,18 +139,25 @@ escape-room-with-ai/
 
 ## 🔄 핵심 플로우
 
-### **1. 사용자 인증**
+### **1. 데이터 수집 & 벡터화**
+
+1. **크롤링**: Selenium으로 전국 16개 지역, 85개 서브지역에서 방탈출 데이터 수집
+2. **벡터화**: OpenAI text-embedding-ada-002로 1536차원 벡터 생성
+3. **품질 검증**: NaN/Inf/더미 벡터 자동 제거 및 품질 검사
+4. **DB 저장**: PostgreSQL + pgvector로 벡터 데이터 저장
+
+### **2. 사용자 인증**
 
 회원가입/로그인 → JWT 토큰 발급 → Redis 저장 → API 요청 시 토큰 검증
 
-### **2. 챗봇 대화**
+### **3. 챗봇 대화**
 
 1. **의도 분석**: LLM 기반 사용자 메시지 의도 파악 (room_recommendation, room_inquiry, general_chat)
 2. **엔티티 추출**: 대화에서 선호도 정보 자동 추출 (지역, 테마, 인원수, 난이도 등)
 3. **응답 생성**: 의도에 따른 맞춤형 응답 (추천, 정보 제공, 일반 대화)
 4. **추천 생성**: RAG 하이브리드 검색 (tsvector + pgvector)
 
-### **3. 데이터 처리**
+### **4. 데이터 처리**
 
 - **중요한 이벤트**: 등록, 로그인, 에러 → 즉시 RMQ 전송
 - **일반 이벤트**: 채팅, 추천 → 배치 처리 (5분마다)
