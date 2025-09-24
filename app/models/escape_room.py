@@ -1,7 +1,11 @@
-from pydantic import BaseModel, Field, field_validator
-from typing import List
 from datetime import datetime
-from ..utils.time import korea_time_field, to_korea_time
+import re
+from typing import List
+
+from pydantic import BaseModel, Field, field_validator
+
+from ..core.exceptions import CustomError
+from ..utils.time import now_korea, to_korea_time
 
 
 class EscapeRoomBase(BaseModel):
@@ -46,32 +50,37 @@ class ChatMessage(BaseModel):
     """Chat message model"""
     role: str = Field(..., description="메시지 역할 (user/assistant)")
     content: str = Field(..., description="메시지 내용")
-    timestamp: datetime = Field(default_factory=korea_time_field)
+    timestamp: datetime = Field(default_factory=now_korea)
 
 
 class ChatRequest(BaseModel):
     """Chat request model"""
-    message: str = Field(..., description="사용자 메시지")
+    message: str = Field(..., min_length=1, max_length=500, description="사용자 메시지 (1-500자)")
     session_id: str | None = Field(None, description="세션 ID")
-    # user_id: str | None = Field(None, description="사용자 ID")
+    
+    @field_validator('message')
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        """메시지 검증"""
+        if not v or not v.strip():
+            raise CustomError("VALIDATION_ERROR", "메시지는 비어있을 수 없습니다.")
+        
+        # XSS 방지: 기본적인 HTML 태그 제거
+        sanitized = re.sub(r'<[^>]+>', '', v.strip())
+        
+        if len(sanitized) > 500:
+            raise CustomError("VALIDATION_ERROR", "메시지가 너무 깁니다. (최대 500자)")
+            
+        return sanitized
 
 
 class ChatResponse(BaseModel):
-    """통합 Chat response model - 방린이 테스트 + 방탈출 추천"""
+    """통합 Chat response model"""
     message: str = Field(..., description="AI 응답")
-    session_id: str = Field(..., description="세션 ID")
-    
-    # 방린이 테스트 관련
-    questionnaire: dict | None = Field(None, description="방린이 테스트 질문/응답")
-    
-    # 방탈출 추천 관련
     recommendations: List[EscapeRoom] | None = Field(None, description="추천 방탈출")
-    user_profile: dict | None = Field(None, description="사용자 프로필 정보")
-    
-    # NLP 분석 결과
+    session_id: str = Field(..., description="세션 ID")
+    chat_type: str | None = Field(None, description="채팅 타입")
     intent: dict | None = Field(None, description="의도 분석 결과")
     entities: dict | None = Field(None, description="엔티티 추출 결과")
-    
-    # 챗봇 상태
-    # chat_type: str = Field(default="general", description="채팅 타입 (questionnaire/recommendation/general)")
-    is_questionnaire_active: bool = Field(default=False, description="방린이 테스트 진행 중 여부")
+    user_prefs: dict | None = Field(None, description="사용자 선호사항")
+    conversation_history: List[dict] | None = Field(None, description="대화 기록")

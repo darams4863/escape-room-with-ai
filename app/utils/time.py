@@ -1,7 +1,8 @@
 """시간 관련 유틸리티 함수들"""
 
-import pytz
 from datetime import datetime
+
+import pytz
 
 # 한국 시간대 상수
 KOREA_TZ = pytz.timezone('Asia/Seoul')
@@ -33,6 +34,3 @@ def format_korea_time(dt: datetime | None) -> str:
     korea_dt = to_korea_time(dt)
     return korea_dt.isoformat()
 
-def korea_time_field():
-    """Pydantic Field용 한국 시간 기본값 팩토리"""
-    return lambda: now_korea()

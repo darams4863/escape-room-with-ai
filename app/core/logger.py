@@ -1,6 +1,8 @@
 import inspect
 from pathlib import Path
+
 from traceloggerx import set_logger
+
 from .config import settings
 
 
@@ -64,25 +66,31 @@ class Logger:
         # 호출자 정보 추출
         caller_info = self._get_caller_info()
         
-        # 메시지 포맷팅
+        # 메시지 포맷팅 (파일명:함수명:라인번호)
         file_name = caller_info["module"].split('.')[-1]
         formatted_message = f"[{file_name}:{caller_info['function']}:{caller_info['line']}] {message}"
         
-        # extra 정보 구성
-        extra_info = {
-            "caller_module": caller_info["module"],
-            "caller_function": caller_info["function"],
-            "caller_line": caller_info["line"]
-        }
-        extra_info.update(kwargs)
+        # extra 정보 구성 (디버깅에 필요한 정보만)
+        extra_info = {}
         
-        # 에러 레벨인 경우 traceback 추가
-        if level.lower() in ['error', 'critical'] and 'traceback' not in kwargs:
-            try:
-                import traceback
-                extra_info['traceback'] = traceback.format_stack()[-3:-1]
-            except:
-                pass
+        # 사용자가 전달한 추가 정보만 포함
+        if kwargs:
+            extra_info.update(kwargs)
+        
+        # 에러 레벨인 경우 추가 정보 제공
+        if level.lower() in ['error', 'critical']:
+            # 간단한 traceback 정보
+            if 'traceback' not in kwargs:
+                try:
+                    import traceback
+                    tb_lines = traceback.format_stack()[-3:-1]
+                    extra_info['traceback'] = [line.strip() for line in tb_lines if line.strip()]
+                except:
+                    pass
+            
+            # 에러 타입 정보 추가
+            if 'error_type' not in kwargs:
+                extra_info['error_type'] = 'unknown'
         
         # 로깅 실행
         getattr(self._base_logger, level.lower())(formatted_message, extra=extra_info)

@@ -1,10 +1,12 @@
+from datetime import datetime, timedelta
+from typing import Any, Dict
+
 import bcrypt
 import jwt
-from datetime import datetime, timedelta
-from .time import now_korea
-from typing import Dict, Any
+
 from ..core.config import settings
 from ..core.logger import logger
+from .time import now_korea
 
 
 class PasswordManager:
@@ -43,7 +45,7 @@ class JWTManager:
         """JWT 액세스 토큰 생성"""
         try:
             # 토큰 만료 시간 계산
-            expire = now_korea() + timedelta(hours=settings.jwt_expire_hours)
+            expire = now_korea() + timedelta(hours=settings.JWT_EXPIRE_HOURS)
             
             # 페이로드 생성
             payload = {
@@ -56,14 +58,14 @@ class JWTManager:
             # JWT 토큰 생성
             token = jwt.encode(
                 payload, 
-                settings.jwt_secret_key, 
-                algorithm=settings.jwt_algorithm
+                settings.JWT_SECRET_KEY, 
+                algorithm=settings.JWT_ALGORITHM
             )
             
             return {
                 "access_token": token,
                 "token_type": "bearer",
-                "expires_in": settings.jwt_expire_hours * 3600  # 초 단위
+                "expires_in": settings.JWT_EXPIRE_HOURS * 3600  # 초 단위
             }
             
         except Exception as e:
@@ -77,8 +79,8 @@ class JWTManager:
             # 토큰 디코딩
             payload = jwt.decode(
                 token, 
-                settings.jwt_secret_key, 
-                algorithms=[settings.jwt_algorithm]
+                settings.JWT_SECRET_KEY, 
+                algorithms=[settings.JWT_ALGORITHM]
             )
             
             return payload

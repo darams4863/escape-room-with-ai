@@ -7,8 +7,8 @@
     "version": 2,
     "refresh": "10s",
     "panels": [
-        {
-            "type": "stat",
+      {
+        "type": "stat",
             "title": "🔢 총 채팅 메시지",
             "targets": [
                 {
@@ -72,12 +72,12 @@
         {
             "type": "stat",
             "title": "🔑 사용자 로그인",
-            "targets": [
-                {
+        "targets": [
+          {
                     "expr": "sum(user_logins_total) or vector(0)",
-                    "refId": "A"
-                }
-            ],
+            "refId": "A"
+          }
+        ],
             "gridPos": {
                 "h": 4,
                 "w": 5,
@@ -102,11 +102,25 @@
         },
         {
             "type": "stat",
-            "title": "💰 총 비용 (USD)",
+            "title": "💰 총 비용",
             "targets": [
                 {
-                    "expr": "sum(openai_cost_total_usd) or vector(0)",
-                    "refId": "A"
+                    "expr": "sum(openai_cost_total_usd_total) or vector(0)",
+                    "refId": "A",
+                    "legendFormat": "${{value}}",
+                    "color": {
+                        "mode": "fixed",
+                        "fixedColor": "green"
+                    }
+                },
+                {
+                    "expr": "sum(openai_cost_total_usd_total * 1500) or vector(0)",
+                    "refId": "B",
+                    "legendFormat": "₩{{value}}",
+                    "color": {
+                        "mode": "fixed",
+                        "fixedColor": "blue"
+                    }
                 }
             ],
             "gridPos": {
@@ -118,22 +132,36 @@
             "fieldConfig": {
                 "defaults": {
                     "unit": "currencyUSD",
+                    "decimals": 6,
                     "color": {
                         "mode": "thresholds"
                     },
                     "thresholds": {
                         "steps": [
                             {"color": "green", "value": null},
-                            {"color": "yellow", "value": 10},
-                            {"color": "red", "value": 50}
+                            {"color": "yellow", "value": 0.01},
+                            {"color": "red", "value": 0.1}
                         ]
                     },
                     "nullValueMode": "null as zero"
                 }
+            },
+            "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "values": false,
+                    "calcs": ["lastNotNull"],
+                    "fields": ""
+                },
+                "textMode": "auto",
+                "wideLayout": true
             }
-        },
-        {
-            "type": "stat",
+      },
+      {
+        "type": "stat",
             "title": "📊 시간 범위별 등록 수",
             "targets": [
                 {
@@ -194,14 +222,40 @@
             "title": "⚡ 채팅 응답 시간",
             "targets": [
                 {
-                    "expr": "histogram_quantile(0.95, sum by (le, chat_type) (rate(chat_response_time_seconds_bucket[5m]))) or vector(0)",
+                    "expr": "histogram_quantile(0.90, sum by (le) (rate(chat_response_time_seconds_bucket[5m]))) or vector(0)",
                     "refId": "A",
-                    "legendFormat": "95th percentile - {{chat_type}}"
+                    "legendFormat": "🎯 목표 속도",
+                    "color": {
+                        "mode": "fixed",
+                        "fixedColor": "blue"
+                    }
                 },
                 {
-                    "expr": "histogram_quantile(0.50, sum by (le, chat_type) (rate(chat_response_time_seconds_bucket[5m]))) or vector(0)",
+                    "expr": "histogram_quantile(0.50, sum by (le) (rate(chat_response_time_seconds_bucket[5m]))) or vector(0)",
                     "refId": "B",
-                    "legendFormat": "50th percentile - {{chat_type}}"
+                    "legendFormat": "📊 일반적인 속도",
+                    "color": {
+                        "mode": "fixed",
+                        "fixedColor": "green"
+                    }
+                },
+                {
+                    "expr": "rate(chat_response_time_seconds_sum[5m]) / rate(chat_response_time_seconds_count[5m]) or vector(0)",
+                    "refId": "C",
+                    "legendFormat": "⚡ 평균 속도",
+                    "color": {
+                        "mode": "fixed",
+                        "fixedColor": "yellow"
+                    }
+                },
+                {
+                    "expr": "histogram_quantile(0.99, sum by (le) (rate(chat_response_time_seconds_bucket[5m]))) or vector(0)",
+                    "refId": "D",
+                    "legendFormat": "⚠️ 최악의 경우",
+                    "color": {
+                        "mode": "fixed",
+                        "fixedColor": "red"
+                    }
                 }
             ],
             "gridPos": {
@@ -213,11 +267,119 @@
             "fieldConfig": {
                 "defaults": {
                     "unit": "s",
+                    "min": 0,
+                    "max": 20,
                     "color": {
                         "mode": "palette-classic"
                     },
                     "nullValueMode": "null as zero"
-                }
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "🎯 목표 속도"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "thresholds"
+                                }
+                            },
+                            {
+                                "id": "thresholds",
+                                "value": {
+                                    "steps": [
+                                        {"color": "green", "value": null},
+                                        {"color": "blue", "value": 0.5},
+                                        {"color": "yellow", "value": 1},
+                                        {"color": "orange", "value": 1.5},
+                                        {"color": "red", "value": 2}
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "📊 일반적인 속도"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "thresholds"
+                                }
+                            },
+                            {
+                                "id": "thresholds",
+                                "value": {
+                                    "steps": [
+                                        {"color": "green", "value": null},
+                                        {"color": "blue", "value": 0.5},
+                                        {"color": "yellow", "value": 1},
+                                        {"color": "orange", "value": 1.5},
+                                        {"color": "red", "value": 2}
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "⚡ 평균 속도"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "thresholds"
+                                }
+                            },
+                            {
+                                "id": "thresholds",
+                                "value": {
+                                    "steps": [
+                                        {"color": "green", "value": null},
+                                        {"color": "blue", "value": 0.5},
+                                        {"color": "yellow", "value": 1},
+                                        {"color": "orange", "value": 1.5},
+                                        {"color": "red", "value": 2}
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "⚠️ 최악의 경우"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "thresholds"
+                                }
+                            },
+                            {
+                                "id": "thresholds",
+                                "value": {
+                                    "steps": [
+                                        {"color": "green", "value": null},
+                                        {"color": "blue", "value": 0.5},
+                                        {"color": "yellow", "value": 1},
+                                        {"color": "orange", "value": 1.5},
+                                        {"color": "red", "value": 2}
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ]
             }
         },
         {
@@ -253,12 +415,16 @@
         },
         {
             "type": "piechart",
-            "title": "💰 모델별 비용",
+            "title": "💰 모델별 비용 (USD)",
             "targets": [
                 {
-                    "expr": "sum by (model) (openai_cost_total_usd) or vector(0)",
+                    "expr": "sum by (model) (openai_cost_total_usd_total) or vector(0)",
                     "refId": "A",
-                    "legendFormat": "{{model}}"
+                    "legendFormat": "{{model}} - ${{value}}",
+                    "color": {
+                        "mode": "fixed",
+                        "fixedColor": "green"
+                    }
                 }
             ],
             "gridPos": {
@@ -270,11 +436,51 @@
             "fieldConfig": {
                 "defaults": {
                     "unit": "currencyUSD",
+                    "custom": {
+                        "displayMode": "auto"
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 0.01},
+                            {"color": "red", "value": 0.1}
+
+                        ]
+                    },
                     "color": {
                         "mode": "palette-classic"
                     },
                     "nullValueMode": "null as zero"
-                }
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "gpt-4o-mini"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.displayMode",
+                                "value": "auto"
+                            },
+                            {
+                                "id": "custom.unit",
+                                "value": "currencyUSD"
+                            },
+                            {
+                                "id": "mappings",
+                                "value": [
+                                    {
+                                        "type": "value",
+                                        "value": "0",
+                                        "text": "$0 (₩0)"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
             },
             "options": {
                 "legend": {
@@ -291,8 +497,8 @@
         {
             "type": "barchart",
             "title": "🔍 RAG 사용률",
-            "targets": [
-                {
+        "targets": [
+          {
                     "expr": "sum by (search_method) (rate(rag_usage_total[5m])) or vector(0)",
                     "refId": "A",
                     "legendFormat": "{{search_method}}"
@@ -320,52 +526,24 @@
             }
         },
         {
-            "type": "table",
-            "title": "❌ API 에러 상세",
-            "targets": [
-                {
-                    "expr": "sum by (error_type, endpoint, method) (api_errors_total) or vector(0)",
-                    "refId": "A",
-                    "format": "table"
-                }
-            ],
+            "type": "text",
+            "title": "❌ API 에러 로그",
             "gridPos": {
                 "h": 8,
                 "w": 12,
                 "x": 12,
                 "y": 20
             },
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "short",
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "thresholds": {
-                        "steps": [
-                            {"color": "green", "value": null},
-                            {"color": "yellow", "value": 1},
-                            {"color": "red", "value": 5}
-                        ]
-                    },
-                    "nullValueMode": "null as zero"
-                }
-            },
             "options": {
-                "showHeader": true,
-                "sortBy": [
-                    {
-                        "desc": true,
-                        "displayName": "Value"
-                    }
-                ]
+                "mode": "html",
+                "content": "<div style='padding: 10px; font-family: monospace; background: #1e1e1e; color: #ffffff; height: 100%; overflow-y: auto;'><h3 style='color: #ff6b6b; margin-bottom: 10px;'>📋 최근 에러 로그</h3><div id='error-logs' style='white-space: pre-wrap; line-height: 1.4;'>로딩 중...</div></div><script>fetch('/api/logs/errors').then(r => r.text()).then(data => { document.getElementById('error-logs').textContent = data; });</script>"
             }
         },
         {
             "type": "timeseries",
             "title": "💾 앱 메모리 사용량",
-            "targets": [
-                {
+        "targets": [
+          {
                     "expr": "memory_usage_bytes / (1024 * 1024)",
                     "refId": "A",
                     "legendFormat": "App Memory (MB)"
@@ -395,13 +573,13 @@
                     "min": 0
                 }
             }
-        },
-        {
-            "type": "gauge",
+      },
+      {
+        "type": "gauge",
             "title": "🖥️ 앱 CPU 사용률",
-            "targets": [
-                {
-                    "expr": "cpu_usage_percent",
+        "targets": [
+          {
+            "expr": "cpu_usage_percent",
                     "refId": "A",
                     "legendFormat": "App CPU %"
                 }
@@ -507,8 +685,8 @@
         {
             "type": "stat",
             "title": "😊 사용자 만족도",
-            "targets": [
-                {
+        "targets": [
+          {
                     "expr": "avg(user_satisfaction_score) or vector(0)",
                     "refId": "A"
                 }
@@ -535,12 +713,12 @@
                     "nullValueMode": "null as zero"
                 }
             }
-        },
-        {
-            "type": "stat",
+      },
+      {
+        "type": "stat",
             "title": "✅ 세션 완료율",
-            "targets": [
-                {
+        "targets": [
+          {
                     "expr": "avg(session_completion_rate) or vector(0)",
                     "refId": "A"
                 }
@@ -604,4 +782,4 @@
             "30d"
         ]
     }
-}
+  }

@@ -1,7 +1,7 @@
 apiVersion: 1
 providers:
-  - name: 'default'
-    folder: 'Escape Room With AI Monitoring'
+  - name: "default"
+    folder: "Escape Room With AI Monitoring"
     type: file
     options:
       path: /etc/grafana/provisioning/dashboards/json

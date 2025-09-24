@@ -4,18 +4,18 @@
 - Prometheus 기반
 - 사용하지 않는 기능 제거
 """
-
-import time
-import json
-import psutil
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
-from typing import Dict, Any, List
-from dataclasses import dataclass, asdict
 from threading import Lock
+import time
+from typing import Any, Dict, List
 
 # Prometheus 메트릭 수집
-from prometheus_client import Counter, Histogram, Gauge, start_http_server
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+import psutil
 
 # ===== 핵심 Prometheus 메트릭 정의 =====
 
@@ -350,7 +350,6 @@ def start_prometheus_server(port: int = 8000):
 def collect_system_metrics():
     """앱 전용 메트릭 수집"""
     try:
-        import os
         process = psutil.Process(os.getpid())
         
         # 앱 메모리 사용량 (RSS - 실제 물리 메모리)
@@ -378,11 +377,11 @@ def track_performance(metric_name: str):
             try:
                 result = func(*args, **kwargs)
                 duration = (time.time() - start_time) * 1000
-                print(f"Performance - {metric_name}: {duration:.2f}ms")
+                print(f"⚡ {metric_name}: {duration:.2f}ms")
                 return result
             except Exception as e:
                 duration = (time.time() - start_time) * 1000
-                print(f"Performance - {metric_name} failed: {duration:.2f}ms, error: {e}")
+                print(f"❌ {metric_name} failed: {duration:.2f}ms, error: {e}")
                 raise
         return wrapper
     return decorator

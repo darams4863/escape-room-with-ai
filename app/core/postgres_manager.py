@@ -1,9 +1,9 @@
-import re
 import asyncio
-import traceback
-import time
 from contextlib import asynccontextmanager
-from typing import Dict, Any
+import re
+import time
+import traceback
+from typing import Any, Dict
 import uuid
 
 import asyncpg
@@ -94,20 +94,23 @@ class PostgresManager:
     
     @asynccontextmanager
     async def get_connection(self):
-        """컨텍스트 매니저로 안전한 연결 관리"""
+        """컨텍스트 매니저로 안전한 연결 관리 (이벤트 루프 격리)"""
         if not self.pool:
             raise RuntimeError("PostgreSQL pool not initialized. Call init() first.")
         
+        conn = None
         try:
-            async with self.pool.acquire() as conn:
-                yield conn
+            # 연결 획득 시 타임아웃 설정
+            conn = await asyncio.wait_for(self.pool.acquire(), timeout=10.0)
+            yield conn
                 
         except (
             ConnectionResetError,
             ConnectionRefusedError,
             StopAsyncIteration,
             GeneratorExit,
-            asyncpg.exceptions.InterfaceError
+            asyncpg.exceptions.InterfaceError,
+            asyncio.TimeoutError
         ) as e:
             logger.error(
                 f"PostgreSQL connection error: {e}",
@@ -119,8 +122,8 @@ class PostgresManager:
             await self._attempt_reconnection()
             
             # 재연결 후 다시 시도
-            async with self.pool.acquire() as conn:
-                yield conn
+            conn = await asyncio.wait_for(self.pool.acquire(), timeout=10.0)
+            yield conn
                 
         except Exception as e:
             logger.error(
@@ -130,6 +133,13 @@ class PostgresManager:
                 traceback=traceback.format_exc()
             )
             raise
+        finally:
+            # 연결 해제 시 안전하게 처리
+            if conn:
+                try:
+                    await asyncio.wait_for(self.pool.release(conn), timeout=5.0)
+                except Exception as e:
+                    logger.debug(f"Connection release error (ignored): {e}")
     
     @asynccontextmanager
     async def get_transaction(self):
@@ -156,7 +166,7 @@ class PostgresManager:
                 raise
     
     async def _attempt_reconnection(self, max_retries: int = 3):
-        """자동 재연결 시도"""
+        """자동 재연결 시도 (안전한 풀 재생성)"""
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(
@@ -165,12 +175,29 @@ class PostgresManager:
                     attempt=attempt
                 )
                 
-                # 기존 풀 정리
+                # 기존 풀 안전하게 정리
                 if self.pool:
-                    await self.pool.close()
+                    try:
+                        # 모든 활성 연결 정리
+                        await asyncio.sleep(0.5)  # 충분한 대기 시간
+                        
+                        # 풀 종료 시 타임아웃 설정
+                        await asyncio.wait_for(self.pool.close(), timeout=10.0)
+                        
+                        # 풀 참조 제거
+                        self.pool = None
+                        
+                    except Exception as e:
+                        logger.debug(f"Pool close error (ignored): {e}")
+                        self.pool = None  # 강제로 None 설정
                 
-                # 새 풀 생성
-                await self.init()
+                # 새 풀 생성 (기존 설정 유지)
+                await self.init(
+                    min_size=3,  # 재연결 시 더 작은 풀 크기
+                    max_size=10,
+                    command_timeout=30,  # 더 짧은 타임아웃
+                    server_settings={'timezone': 'Asia/Seoul'}
+                )
                 
                 logger.info(
                     "PostgreSQL reconnection successful",

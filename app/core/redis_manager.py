@@ -1,14 +1,16 @@
-import re 
-import json
-import uuid
-import time 
 from datetime import datetime
+import json
+import re
+import time
 from typing import Any, Dict, Set
+import uuid
+
 from redis.asyncio import ConnectionPool, Redis
+
+from ..utils.time import now_korea_iso
 from .config import settings
 from .logger import logger
 from .monitor import track_redis_operation
-from ..utils.time import now_korea_iso
 
 
 def default_serializer(obj):
@@ -94,6 +96,16 @@ class RedisManager:
         """Redis 파이프라인 생성"""
         redis = self.get_connection()
         return redis.pipeline(transaction=transaction)
+    
+    async def health_check(self) -> bool:
+        """Redis 연결 상태 확인"""
+        try:
+            redis = self.get_connection()
+            await redis.ping()
+            return True
+        except Exception as e:
+            logger.error(f"Redis health check failed: {e}")
+            return False
     
     async def close(self):
         """연결 풀 종료"""
