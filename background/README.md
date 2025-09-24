@@ -210,8 +210,8 @@ LIMIT 5
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   🕷️ 크롤러      │───▶│   🗄️ PostgreSQL   │───▶│  🧠 벡터 생성기   │
-│  data_crawler   │    │ + tsvector +     │    │ vector_generator │
-│                 │    │    pgvector      │    │                 │
+│  data_crawler   │    │ + tsvector + pgvector │    │ vector_generator │
+│                 │    │                 │    │                 │
 │ • 백룸 사이트    │    │ • 방탈출 데이터   │    │ • OpenAI API     │
 │ • 상세 정보 수집 │    │ • 메타데이터      │    │ • 임베딩 생성    │
 │ • 상태 추적      │    │ • 벡터 저장       │    │ • 품질 검증      │
