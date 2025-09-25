@@ -90,30 +90,25 @@ async def _analyze_intent_with_llm(user_message: str) -> Dict[str, Any]:
 JSON 응답:
 """
         
-        # LangChain 방식으로 호출
+        # LangChain 방식으로 호출 (토큰 사용량 포함)
         start_time = time.time()
-        response_text = await llm.generate_with_messages([HumanMessage(content=prompt)])
+        response_text, token_usage = await llm.generate_with_messages_and_usage([HumanMessage(content=prompt)])
         response_time = (time.time() - start_time) * 1000
         
-        # # 실제 토큰 사용량 기반 비용 계산
-        # llm_output = response.llm_output
-        # prompt_tokens = llm_output.get('token_usage', {}).get('prompt_tokens', 0)
-        # completion_tokens = llm_output.get('token_usage', {}).get('completion_tokens', 0)
+        # 실제 토큰 사용량 기반 비용 계산
+        prompt_tokens = token_usage.get('prompt_tokens', 0)
+        completion_tokens = token_usage.get('completion_tokens', 0)
         
-        # # GPT-4o-mini 가격 (2025년 9월 20일 기준)
-        # # cf. https://platform.openai.com/docs/pricing
-        # input_cost = (prompt_tokens / 1000000) * 0.15  # $0.15 per 1M tokens
-        # output_cost = (completion_tokens / 1000000) * 0.60  # $0.60 per 1M tokens
-
-        # 간단한 비용 추정 (토큰 수 추정)
-        estimated_tokens = len(prompt.split()) * 1.3 + len(response_text.split()) * 1.3
-        input_cost = (len(prompt.split()) * 1.3 / 1000000) * 0.15
-        output_cost = (len(response_text.split()) * 1.3 / 1000000) * 0.60
+        # GPT-4o-mini 가격 (2025년 9월 20일 기준)
+        # cf. https://platform.openai.com/docs/pricing
+        input_cost = (prompt_tokens / 1000000) * 0.15  # $0.15 per 1M tokens
+        output_cost = (completion_tokens / 1000000) * 0.60  # $0.60 per 1M tokens
         total_cost = input_cost + output_cost
         
         # 한국 원화 환율 계산 (1 USD = 1500 KRW)
         total_cost_krw = total_cost * 1500
-        logger.info(f"Intent 분석 비용: ${total_cost:.6f} (₩{total_cost_krw:.2f}) - 추정 토큰: {estimated_tokens}")
+        total_tokens = prompt_tokens + completion_tokens
+        logger.info(f"Intent 분석 비용: ${total_cost:.6f} (₩{total_cost_krw:.2f}) - 실제 토큰: {total_tokens} (입력: {prompt_tokens}, 출력: {completion_tokens})")
         
         # API 호출 추적
         track_api_call(

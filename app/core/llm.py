@@ -60,6 +60,17 @@ class LLMService:
             logger.error(f"LLM generation with messages error: {e}")
             raise
     
+    async def generate_with_messages_and_usage(self, messages: List[BaseMessage]) -> tuple[str, dict]:
+        """메시지 리스트로 생성 + 토큰 사용량 반환"""
+        try:
+            response = await self.llm.agenerate([messages])
+            text = response.generations[0][0].text
+            usage = response.llm_output.get('token_usage', {}) if response.llm_output else {}
+            return text, usage
+        except Exception as e:
+            logger.error(f"LLM generation with usage error: {e}")
+            raise
+    
     async def create_embedding(self, text: str) -> List[float]:
         """임베딩 생성"""
         try:
