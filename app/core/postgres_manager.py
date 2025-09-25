@@ -28,6 +28,11 @@ class PostgresManager:
         server_settings: Dict[str, str] | None = None
     ):
         """PostgreSQL 연결 풀 초기화"""
+        # 이미 풀이 존재하면 중복 생성 방지
+        if self.pool is not None:
+            logger.debug("PostgreSQL pool already exists, skipping initialization")
+            return
+            
         try:
             self.connection_id = str(uuid.uuid4())[:8]
             

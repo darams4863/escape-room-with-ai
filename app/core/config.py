@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     RMQ_PASSWORD: str = os.getenv("RMQ_PASSWORD", "admin")
     RMQ_VHOST: str = os.getenv("RMQ_VHOST", "/")
     
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")  # DEBUG, INFO, WARNING, ERROR
+    
     # OpenAI 
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")

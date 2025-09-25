@@ -131,8 +131,9 @@ logs/
 .env.local
 .env.prod
 
-# Background scripts (크롤링/데이터 처리 스크립트)
-/background/
+# Background 
+/background/data
+/background/logs
 
 # Docker
 .dockerignore

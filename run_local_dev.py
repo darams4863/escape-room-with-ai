@@ -5,10 +5,12 @@
 - PostgreSQL, Redis, RabbitMQ는 도커에서 실행
 """
 
+import subprocess
+
 # import os
 import sys
-import subprocess
 import time
+
 # from pathlib import Path
 
 def check_docker_containers():

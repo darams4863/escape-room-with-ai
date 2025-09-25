@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from ..core.connections import postgres_manager
 from ..core.logger import logger
-from ..models.analytics import BusinessInsight, PopularRegion, PopularTheme, UserTrend
+from ..models.analytics import PopularRegion, PopularTheme, UserTrend
 
 
 async def log_analytics_event(
@@ -35,7 +35,7 @@ async def log_analytics_event(
 
 
 async def get_popular_regions(days: int = 7) -> List[PopularRegion]:
-    """인기 지역 조회 (단순화된 스키마)"""
+    """인기 지역 조회"""
     try:
         async with postgres_manager.get_connection() as conn:
             rows = await conn.fetch(
@@ -64,12 +64,7 @@ async def get_popular_regions(days: int = 7) -> List[PopularRegion]:
                 region=row['region'],
                 mention_count=row['mention_count'],
                 percentage=row['percentage'],
-                trend='stable'  # TODO: 이전 기간과 비교
-                # 구현 예시:
-                # trend = calculate_trend(current_count, previous_count)
-                # if change_rate > 0.2: return 'up'      # 20% 이상 증가
-                # elif change_rate < -0.2: return 'down'  # 20% 이상 감소  
-                # else: return 'stable'                   # 20% 이내 변화
+                trend='stable'  # 현재는 stable로 고정, 향후 트렌드 계산 로직 추가 예정
             ) for row in rows]
     except Exception as e:
         logger.error(f"Failed to get popular regions: {e}")
@@ -77,7 +72,7 @@ async def get_popular_regions(days: int = 7) -> List[PopularRegion]:
 
 
 async def get_popular_themes(days: int = 7) -> List[PopularTheme]:
-    """인기 테마 조회 (단순화된 스키마)"""
+    """인기 테마 조회"""
     try:
         async with postgres_manager.get_connection() as conn:
             rows = await conn.fetch(
@@ -100,12 +95,7 @@ async def get_popular_themes(days: int = 7) -> List[PopularTheme]:
                 theme=row['theme'],
                 mention_count=row['mention_count'],
                 percentage=row['percentage'],
-                trend='stable'  # TODO: 이전 기간과 비교
-                # 구현 예시:
-                # trend = calculate_trend(current_count, previous_count)
-                # if change_rate > 0.2: return 'up'      # 20% 이상 증가
-                # elif change_rate < -0.2: return 'down'  # 20% 이상 감소  
-                # else: return 'stable'                   # 20% 이내 변화
+                trend='stable'  # 현재는 stable로 고정, 향후 트렌드 계산 로직 추가 예정
             ) for row in rows]
     except Exception as e:
         logger.error(f"Failed to get popular themes: {e}")
@@ -113,7 +103,7 @@ async def get_popular_themes(days: int = 7) -> List[PopularTheme]:
 
 
 async def get_user_trends(days: int = 7) -> List[UserTrend]:
-    """사용자 트렌드 조회 (단순화된 스키마)"""
+    """사용자 트렌드 조회"""
     try:
         async with postgres_manager.get_connection() as conn:
             # 평균 세션 길이 (JSONB에서 응답 시간 추출)
@@ -170,60 +160,10 @@ async def get_user_trends(days: int = 7) -> List[UserTrend]:
         return []
 
 
-async def save_business_insight(insight: BusinessInsight) -> bool:
-    """비즈니스 인사이트 저장"""
-    try:
-        async with postgres_manager.get_connection() as conn:
-            await conn.execute(
-                """
-                    INSERT INTO business_insights (insight_type, period, data, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (insight_type, period) 
-                    DO UPDATE SET 
-                    data = EXCLUDED.data,
-                    updated_at = EXCLUDED.updated_at
-                """, 
-                insight.insight_type,
-                insight.period,
-                insight.data,
-                insight.created_at,
-                insight.updated_at
-            )
-        return True
-    except Exception as e:
-        logger.error(f"Failed to save business insight: {e}")
-        return False
-
-
-async def get_business_insights(insight_type: str = None) -> List[BusinessInsight]:
-    """비즈니스 인사이트 조회"""
-    try:
-        async with postgres_manager.get_connection() as conn:
-            if insight_type:
-                rows = await conn.fetch(
-                    """
-                        SELECT * FROM business_insights 
-                        WHERE insight_type = $1
-                        ORDER BY updated_at DESC
-                    """, 
-                    insight_type
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                        SELECT * FROM business_insights 
-                        ORDER BY updated_at DESC
-                    """
-                )
-            
-            return [BusinessInsight(**row) for row in rows]
-    except Exception as e:
-        logger.error(f"Failed to get business insights: {e}")
-        return []
 
 
 async def get_session_quality_data(days: int = 30) -> List[Dict[str, Any]]:
-    """세션 품질 분석을 위한 데이터 조회 (단순화된 스키마)"""
+    """세션 품질 분석을 위한 데이터 조회"""
     try:
         async with postgres_manager.get_connection() as conn:
             rows = await conn.fetch(
@@ -344,7 +284,7 @@ async def get_user_recommendation_history(
 
 
 async def get_trend_prediction_data(months: int = 12) -> Dict[str, Any]:
-    """트렌드 예측을 위한 월별 데이터 조회 (단순화된 스키마)"""
+    """트렌드 예측을 위한 월별 데이터 조회"""
     try:
         async with postgres_manager.get_connection() as conn:
             # 월별 인기 테마 데이터

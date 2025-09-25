@@ -2,34 +2,34 @@ global:
   scrape_interval: 10s
   evaluation_interval: 10s
   external_labels:
-    cluster: 'escape-room-prod'
-    environment: 'production'
+    cluster: "escape-room-prod"
+    environment: "production"
 
 rule_files:
   # - "alert_rules.yml"  # 알림 규칙 (나중에 필요시 추가)
 
 scrape_configs:
   # FastAPI 애플리케이션 메트릭
-  - job_name: 'escape-room-api'
+  - job_name: "escape-room-api"
     static_configs:
       # - targets: ['fastapi:8001']  # Docker 내부 네트워크
       # - targets: ['host.docker.internal:8000']  # 디버깅 - 로컬 FastAPI
-      - targets: ['host.docker.internal:8001']  # 메트릭 서버 포트
+      - targets: ["host.docker.internal:8001"] # 메트릭 서버 포트
     scrape_interval: 10s
-    metrics_path: '/metrics'
+    metrics_path: "/metrics"
     scrape_timeout: 10s
     # 실무에서 자주 사용하는 설정
     honor_labels: true
     honor_timestamps: true
-    
+
   # Prometheus 자체 메트릭
-  - job_name: 'prometheus'
+  - job_name: "prometheus"
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["localhost:9090"]
     scrape_interval: 10s
-    
+
   # Node Exporter (시스템 메트릭)
-  - job_name: 'node-exporter'
+  - job_name: "node-exporter"
     static_configs:
-      - targets: ['node-exporter:9100']
+      - targets: ["node-exporter:9100"]
     scrape_interval: 10s

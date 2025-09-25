@@ -52,28 +52,28 @@ async def get_latest_session_by_user_id(user_id: int) -> Dict | None:
         logger.error(f"Failed to get latest session: {e}", user_id=user_id)
         return None
 
-async def get_session_by_id(session_id: str) -> Dict | None:
-    """세션 ID로 세션 조회"""
-    try:
-        async with postgres_manager.get_connection() as conn:
-            row = await conn.fetchrow(
-                """
-                    SELECT 
-                        id,
-                        session_id,
-                        user_id,
-                        conversation_history,
-                        created_at,
-                        updated_at
-                    FROM chat_sessions 
-                    WHERE session_id = $1
-                """, 
-                session_id
-            )
-            return dict(row) if row else None
-    except Exception as e:
-        logger.error(f"Failed to get session: {e}", session_id=session_id)
-        return None
+# async def get_session_by_id(session_id: str) -> Dict | None:
+#     """세션 ID로 세션 조회"""
+#     try:
+#         async with postgres_manager.get_connection() as conn:
+#             row = await conn.fetchrow(
+#                 """
+#                     SELECT 
+#                         id,
+#                         session_id,
+#                         user_id,
+#                         conversation_history,
+#                         created_at,
+#                         updated_at
+#                     FROM chat_sessions 
+#                     WHERE session_id = $1
+#                 """, 
+#                 session_id
+#             )
+#             return dict(row) if row else None
+#     except Exception as e:
+#         logger.error(f"Failed to get session: {e}", session_id=session_id)
+#         return None
 
 async def update_session(session_id: str, conversation_history: str) -> bool:
     """세션 대화 기록 업데이트"""

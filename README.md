@@ -6,9 +6,9 @@
 
 ### **핵심 기술 특성**
 
-- **확장 가능한 LLM 아키텍처**: LangChain 기반으로 OpenAI, Anthropic, Google 등 다양한 LLM 제공자 지원
+- **확장 가능한 LLM 아키텍처**: LangChain 기반으로 OpenAI GPT-4o-mini를 활용한 LLM 서비스
 - **RAG 하이브리드 검색**: tsvector(키워드) + pgvector(의미) 검색으로 정확한 방탈출 추천
-- **실시간 ML 추론**: PyTorch LSTM + Attention 모델로 세션 품질 예측 및 개인화 추천
+- **ML 모델 아키텍처**: PyTorch LSTM + Attention 모델 정의 및 싱글톤 패턴 모델 관리
 - **비동기 데이터 처리**: RabbitMQ 기반 사용자 행동 분석 및 실시간 메트릭 수집
 
 ## 🚀 주요 기능
@@ -18,7 +18,7 @@
 - **자동 크롤링**: Selenium 기반 고급 크롤링으로 전국 16개 지역, 85개 서브지역에서 방탈출 데이터 수집
 - **AI 벡터화**: OpenAI text-embedding-ada-002로 1536차원 벡터 생성하여 의미적 검색 구현
 - **품질 보장**: NaN/Inf/더미 벡터 자동 제거 및 벡터 품질 검증 시스템
-- **배치 처리**: API 비용 80% 절약하는 효율적 벡터화 및 Dead Letter Queue를 통한 안정성 확보
+- **배치 처리**: 효율적 벡터화 및 Dead Letter Queue를 통한 안정성 확보
 
 > 📋 **상세 구현 설명**: [background/README.md](background/README.md)에서 크롤링 시나리오, 벡터화 프로세스, 비용 모니터링 등 세부사항 확인
 
@@ -32,9 +32,9 @@
 
 ### **ML 기반 분석 & 예측**
 
-- **개인화 추천**: PyTorch 신경망 모델 기반 사용자 맞춤형 추천
-- **트렌드 예측**: LSTM 모델을 통한 월별 인기 테마/지역 예측
-- **세션 품질 예측**: LSTM + Attention 모델로 세션 품질 실시간 평가
+- **개인화 추천**: RAG 하이브리드 검색 기반 사용자 맞춤형 추천
+- **트렌드 예측**: LSTM 모델 아키텍처 정의 (향후 실제 데이터 기반 학습 예정)
+- **세션 품질 예측**: LSTM + Attention 모델 아키텍처 정의 (향후 실제 데이터 기반 학습 예정)
 - **비즈니스 인사이트**: 인기 지역/테마, 사용자 트렌드 분석
 
 ### **인프라 & 모니터링**
@@ -42,7 +42,7 @@
 - **세션 관리**: Redis 캐시 + PostgreSQL 백업
 - **비동기 처리**: RabbitMQ 기반 사용자 행동 분석 및 메트릭 수집
 - **실시간 모니터링**: Prometheus + Grafana 대시보드
-- **ML 모델 관리**: MLflow를 통한 모델 관리 및 실험 추적
+- **ML 모델 관리**: 싱글톤 패턴의 MLModelManager를 통한 모델 생명주기 관리
 
 ### **데이터 수집 & 저장**
 
@@ -68,7 +68,7 @@
 - **OpenAI text-embedding-ada-002**: 1536차원 벡터 임베딩
 - **NLP**: 의도 분석, 엔티티 추출, 자연어 이해
 - **PyTorch**: LSTM + Attention 모델 구현
-- **MLflow**: 모델 관리 및 실험 추적
+- **싱글톤 패턴**: MLModelManager를 통한 모델 생명주기 관리
 - **RAG**: tsvector(키워드) + pgvector(의미) 하이브리드 검색
 - **Selenium**: 고급 웹 크롤링 및 봇 탐지 우회
 
@@ -196,20 +196,20 @@ escape-room-with-ai/
 
 ### **확장성과 유연성**
 
-- **LangChain 기반 LLM 아키텍처**: 다양한 LLM 제공자(OpenAI, Anthropic, Google) 지원으로 벤더 락인 방지
+- **LangChain 기반 LLM 아키텍처**: OpenAI GPT-4o-mini를 활용한 LLM 서비스 (다른 벤더로 확장 가능한 구조)
 - **계층형 아키텍처**: API → Service → Repository 분리로 유지보수성과 테스트 용이성 확보
 - **비동기 처리**: RabbitMQ 기반 메시지 큐로 확장 가능한 백그라운드 처리
 
 ### **정확한 추천을 위한 하이브리드 검색**
 
 - **tsvector + pgvector 결합**: 키워드 검색의 정확성과 의미 검색의 폭넓음을 동시에 확보
-- **가중치 기반 랭킹**: tsvector(0.7) + pgvector(0.3)로 검색 결과 최적화
+- **가중치 기반 랭킹**: tsvector + pgvector 가중치 조합으로 검색 결과 최적화
 - **실시간 임베딩**: 사용자 메시지를 실시간으로 벡터화하여 의미적 유사도 검색
 
 ### **데이터 기반 의사결정**
 
 - **실시간 메트릭 수집**: 사용자 행동, 성능, 비용 데이터를 자동으로 수집하고 분석
-- **ML 기반 예측**: PyTorch LSTM + Attention 모델로 세션 품질과 트렌드 예측
+- **ML 모델 아키텍처**: PyTorch LSTM + Attention 모델 정의 및 싱글톤 패턴 모델 관리
 - **비즈니스 인사이트**: 인기 지역/테마 분석으로 서비스 개선점 도출
 
 ### **운영 효율성**
@@ -254,7 +254,7 @@ graph TB
 
     subgraph "ML & Analytics"
         ML[PyTorch Models<br/>LSTM + Attention]
-        MLF[MLflow<br/>Model Management]
+        MLF[MLModelManager<br/>Singleton Pattern]
         WORK[RMQ Worker<br/>Background Processing]
     end
 

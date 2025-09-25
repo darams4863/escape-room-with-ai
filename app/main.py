@@ -27,7 +27,6 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Escape Room AI Chatbot...")
     try:
         await connections.connect_all()
-        logger.info("✅ All database connections established")
         
         # RMQ Worker 실행 방식 선택
         if connections.rmq.is_connected:
@@ -67,7 +66,7 @@ async def lifespan(app: FastAPI):
         logger.info("📈 Prometheus metrics server started on port 8001")
         
         # ML 모델 매니저는 지연 로딩으로 필요시 자동 초기화됨
-        logger.info("🤖 ML 모델 매니저 준비 완료")
+        logger.info("🤖 ML 모델 매니저 준비 완료 (지연 로딩)")
         
         # 시스템 메트릭 수집 시작 
         def collect_metrics_loop():

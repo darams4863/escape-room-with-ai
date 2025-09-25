@@ -4,14 +4,14 @@
 """
 
 import asyncio
+from datetime import datetime
 import hashlib
 import json
+from pathlib import Path
 import re
 import sys
 import time
-from datetime import datetime
-from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List
 
 import asyncpg
 from openai import AsyncOpenAI
@@ -21,9 +21,11 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 # 환경변수 로드
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / '.env')
 
 from app.core.config import settings
+
 
 class VectorGenerator:
     """방탈출 데이터 벡터화 및 임베딩 생성"""
@@ -187,7 +189,7 @@ class VectorGenerator:
             print(f"    ✅ 배치 업데이트 성공: {len(valid_updates)}개")
             return len(valid_updates)
                 
-            except Exception as e:
+        except Exception as e:
             print(f"    ❌ 배치 처리 실패: {e}")
             return 0
     
@@ -727,8 +729,8 @@ class VectorGenerator:
                 for i in range(0, len(texts), max_batch_size):
                     chunk = texts[i:i + max_batch_size]
                     start_time = time.time()
-            response = await self.openai_client.embeddings.create(
-                model=self.embedding_model,
+                    response = await self.openai_client.embeddings.create(
+                        model=self.embedding_model,
                         input=chunk
                     )
                     

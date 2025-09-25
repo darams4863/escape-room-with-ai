@@ -27,9 +27,15 @@ class Logger:
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
         
+        # 로그 레벨 설정 (개발환경에서만 DEBUG)
+        log_level = settings.LOG_LEVEL.upper()
+        if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR"]:
+            log_level = "INFO"
+        
         # 기본 로거 생성
         self._base_logger = set_logger(
             "escape-room-ai",
+            level=log_level,
             extra={
                 "service": "escape_room_ai",
                 "version": settings.APP_VERSION
